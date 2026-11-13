@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Raid Point
+Comment=Orquestre agentes de IA em terminais por projeto
+Exec=@BIN@/raid-point
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;TerminalEmulator;
+StartupWMClass=dev.raidpoint.App

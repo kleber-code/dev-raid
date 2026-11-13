@@ -1,0 +1,685 @@
+#!/usr/bin/env python3
+"""Raid Point - orquestre agentes de IA em terminais por projeto (GTK4 + VTE + tmux)."""
+import gi, json, os, sys, subprocess, hashlib, shlex, re, shutil, threading, time
+gi.require_version("Gtk", "4.0")
+gi.require_version("Vte", "3.91")
+from gi.repository import Gtk, Vte, GLib, Gdk, Gio, Pango
+
+_AQUI = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(_AQUI, ".."))
+from raidpoint import core
+RAIDPOINT = os.path.join(_AQUI, "raidpoint")
+
+CFG = str(core.CFG)
+DB = os.path.join(CFG, "projects.json")
+TMUX = core.TMUX
+FONT = "Noto Sans Mono 11"
+PALETA = ["#cba6f7", "#89b4fa", "#a6e3a1", "#f9e2af", "#fab387", "#f38ba8", "#94e2d5", "#74c7ec"]
+
+def load():
+    try: return json.load(open(DB))
+    except Exception: return {}
+
+def save(d):
+    os.makedirs(CFG, exist_ok=True)
+    json.dump(d, open(DB, "w"), indent=2, ensure_ascii=False)
+
+def agentes():
+    try: return json.load(open(os.path.join(CFG, "agents.json")))
+    except Exception: return [{"name": "Shell", "cmd": ""}]
+
+def tmux(*a):
+    return subprocess.run(TMUX + list(a), text=True, capture_output=True)
+
+CM = str(core.CM)
+
+def ssh_hosts():
+    hs = []
+    try:
+        for l in open(os.path.expanduser("~/.ssh/config")):
+            m = re.match(r"\s*Host\s+(.+)", l, re.I)
+            if m:
+                hs += [h for h in m.group(1).split() if not re.search(r"[*?!]", h) and h != "github.com"]
+    except Exception: pass
+    return sorted(set(hs))
+
+def remote_argv(name, p):
+    """comando que conecta (mosh/ssh) à sessão tmux do projeto remoto"""
+    tm = ["tmux", "new-session", "-A", "-s", name] + (["-c", p["dir"]] if p.get("dir") else []) + \
+         [";", "set", "-g", "mouse", "on", ";", "set", "-g", "allow-set-title", "off",
+          ";", "set", "-g", "pane-border-status", "top",
+          ";", "set", "-g", "pane-border-format", " #{pane_title} "]
+    if p.get("transport", "mosh") == "mosh" and shutil.which("mosh"):
+        return ["mosh", p["host"], "--"] + tm
+    return ["ssh", "-t", p["host"], shlex.join(tm)]
+
+def run_tmux(name, *a):
+    """roda um comando tmux na sessão do projeto (local, ou na VPS via ssh)"""
+    p = load().get(name, {})
+    if p.get("host"):
+        cmd = ["ssh", "-o", "ControlMaster=auto", "-o", f"ControlPath={CM}/cm-%C", "-o", "ControlPersist=120",
+               "-o", "BatchMode=yes", p["host"], shlex.join(["tmux", *a])]
+        try: return subprocess.run(cmd, text=True, capture_output=True, timeout=15)
+        except Exception as e: return subprocess.CompletedProcess(cmd, 1, "", str(e))
+    return tmux(*a)
+
+def pdir(name):
+    p = load().get(name, {})
+    return p.get("dir") if p.get("host") else os.path.expanduser(p.get("dir", "~"))
+
+def alive():
+    r = tmux("list-sessions", "-F", "#{session_name}")
+    return set(r.stdout.split()) if r.returncode == 0 else set()
+
+def cor(nome):
+    return PALETA[int(hashlib.md5(nome.encode()).hexdigest(), 16) % len(PALETA)]
+
+CSS = """
+window, headerbar { background: #1e1e2e; color: #cdd6f4; }
+headerbar { box-shadow: none; border-bottom: 1px solid #11111b; min-height: 40px; }
+headerbar .title { font-weight: 600; font-size: 13px; }
+headerbar .subtitle { color: #6c7086; font-size: 11px; }
+headerbar button { color: #a6adc8; border-radius: 6px; padding: 3px 9px; min-height: 0; }
+headerbar button:hover { background: #313244; color: #cdd6f4; }
+.agente { background: #cba6f7; color: #1e1e2e; font-weight: bold; }
+headerbar button.agente:hover { background: #d9bdfa; color: #1e1e2e; }
+headerbar button.sync-on { background: #f9e2af; color: #1e1e2e; }
+.pop-item { padding: 6px 14px; border-radius: 6px; }
+.perigo:hover { color: #f38ba8; }
+
+.side { background: #181825; border-right: 1px solid #11111b; }
+.side-titulo { color: #6c7086; font-size: 10px; font-weight: bold; letter-spacing: 1.5px; }
+.lista { background: transparent; }
+.lista row { margin: 1px 6px; padding: 6px 8px; border-radius: 8px; color: #a6adc8; }
+.lista row:hover { background: #1e1e2e; }
+.lista row:selected { background: #313244; color: #cdd6f4; }
+.avatar { border-radius: 7px; min-width: 26px; min-height: 26px; color: #1e1e2e;
+          font-weight: bold; font-size: 12px; }
+.nome { font-size: 13px; }
+.ponto-on { color: #a6e3a1; font-size: 8px; }
+.ponto-off { color: #45475a; font-size: 8px; }
+.novo { margin: 8px 8px 10px 8px; padding: 7px; border-radius: 8px; color: #a6adc8;
+        background: transparent; border: 1px dashed #45475a; }
+.novo:hover { background: #1e1e2e; color: #cdd6f4; border-color: #cba6f7; }
+
+.ponto-remoto { color: #89b4fa; font-size: 8px; }
+.side-right { background: #181825; border-left: 1px solid #11111b; }
+.ag-sec { color: #6c7086; font-size: 10px; font-weight: bold; letter-spacing: 1.5px; padding: 10px 6px 2px 6px; }
+.ag-row { font-size: 12px; }
+.ag-sub { color: #6c7086; font-size: 11px; }
+headerbar .subtitle-git { color: #6c7086; font-size: 10px; }
+.tabs { margin: 12px 10px 6px 10px; padding: 2px; background: #11111b; border-radius: 8px; }
+.tab { padding: 3px 4px; border-radius: 6px; color: #6c7086; font-size: 11px; font-weight: bold;
+       background: transparent; border: none; box-shadow: none; min-height: 0; }
+.tab:checked { background: #313244; color: #cdd6f4; }
+.busca { margin: 0 10px 6px 10px; background: #11111b; color: #cdd6f4; border-radius: 6px; min-height: 0; padding: 3px 8px; }
+.repo-pai { color: #6c7086; font-size: 10px; }
+.ponto-proj { color: #cba6f7; font-size: 8px; }
+.vazio-t { color: #6c7086; font-size: 14px; }
+vte-terminal { padding: 10px 6px 4px 12px; }
+scrollbar { opacity: 0; }
+"""
+
+def git_summary(d, pr_cache, key):
+    r = subprocess.run(["git", "-C", d, "status", "--porcelain=v1", "-b"], text=True, capture_output=True)
+    if r.returncode != 0: return ""
+    lines = r.stdout.splitlines(); head = lines[0][3:] if lines else ""
+    branch = head.split("...")[0]
+    m = re.search(r"\[(.*?)\]", head); sync = ""
+    if m:
+        a = re.search(r"ahead (\d+)", m.group(1)); b = re.search(r"behind (\d+)", m.group(1))
+        sync = (f"  ↑{a.group(1)}" if a else "") + (f"  ↓{b.group(1)}" if b else "")
+    dirty = len(lines) - 1
+    txt = f"⎇ {branch}" + (f"  ● {dirty} alterado{'s' if dirty != 1 else ''}" if dirty else "  ✓ limpo") + sync
+    ts, pr = pr_cache.get(key, (0, ""))
+    if time.time() - ts > 60:
+        pr = ""
+        if shutil.which("gh"):
+            g = subprocess.run(["gh", "pr", "view", "--json", "number,statusCheckRollup"], cwd=d, text=True,
+                               capture_output=True, timeout=12)
+            if g.returncode == 0:
+                try:
+                    j = json.loads(g.stdout); st = [c.get("conclusion") or c.get("status") for c in j.get("statusCheckRollup") or []]
+                    ic = "✗" if any(x in ("FAILURE", "ERROR") for x in st) else ("…" if any(x in ("IN_PROGRESS", "QUEUED", "PENDING", None) for x in st) else "✓")
+                    pr = f"  PR #{j['number']} {ic if st else ''}"
+                except Exception: pass
+        pr_cache[key] = (time.time(), pr)
+    return txt + pr
+
+class App(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="dev.raidpoint.App")
+        self.terms, self.rows, self.cur = {}, {}, None
+
+    def do_activate(self):
+        Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
+        css = Gtk.CssProvider(); css.load_from_string(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.win = Gtk.ApplicationWindow(application=self, default_width=1150, default_height=720)
+
+        # --- barra de título: toggle da sidebar | projeto | ações
+        hb = Gtk.HeaderBar()
+        self.titulo = Gtk.Label(label="Raid Point"); self.titulo.add_css_class("title")
+        self.sub = Gtk.Label(label=""); self.sub.add_css_class("subtitle-git")
+        tb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+        tb.append(self.titulo); tb.append(self.sub)
+        hb.set_title_widget(tb)
+        self._busy = False; self._sig = None; self._asking = False; self.pr_cache = {}
+        tog = Gtk.Button(icon_name="sidebar-show-symbolic", tooltip_text="Mostrar/ocultar projetos (Ctrl+B)")
+        tog.connect("clicked", lambda *_: self.toggle_side())
+        hb.pack_start(tog)
+        self.pop = Gtk.Popover()
+        caixa = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=6, margin_bottom=6,
+                        margin_start=6, margin_end=6)
+        self.wt = Gtk.CheckButton(label="Isolar em git worktree", margin_start=8, margin_bottom=4,
+                                  tooltip_text="Cada agente em sua própria branch/pasta: sem conflito entre agentes")
+        caixa.append(self.wt)
+        for ag in agentes():
+            b = Gtk.Button(label=ag["name"], has_frame=False, halign=Gtk.Align.FILL)
+            b.get_child().set_xalign(0); b.add_css_class("pop-item")
+            b.connect("clicked", lambda _b, a=ag: (self.pop.popdown(), self.add_agent(a)))
+            caixa.append(b)
+        self.pop.set_child(caixa)
+        mb = Gtk.MenuButton(label="＋ Agente", popover=self.pop, tooltip_text="Abrir um agente em novo painel")
+        mb.add_css_class("agente")
+        hb.pack_start(mb)
+        self.sync = Gtk.Button(label="⇄ Sincronizar", tooltip_text="Digitar em todos os painéis ao mesmo tempo")
+        self.sync.connect("clicked", lambda *_: self.toggle_sync())
+        hb.pack_start(self.sync)
+        def acao(txt, tip, cb, extra=None):
+            b = Gtk.Button(icon_name=txt, tooltip_text=tip)
+            if extra: b.add_css_class(extra)
+            b.connect("clicked", cb); return b
+        self.layout = "tiled"
+        lp = Gtk.Popover()
+        lc = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=6, margin_bottom=6,
+                     margin_start=6, margin_end=6)
+        for nome, lay in [("Colunas  (lado a lado)", "even-horizontal"), ("Linhas  (empilhados)", "even-vertical"),
+                          ("Grade", "tiled"), ("Principal à esquerda", "main-vertical"),
+                          ("Principal em cima", "main-horizontal")]:
+            b = Gtk.Button(label=nome, has_frame=False); b.get_child().set_xalign(0); b.add_css_class("pop-item")
+            b.connect("clicked", lambda _b, l=lay: (lp.popdown(), self.set_layout(l)))
+            lc.append(b)
+        lp.set_child(lc)
+        lb = Gtk.MenuButton(popover=lp, icon_name="view-grid-symbolic", tooltip_text="Layout dos painéis")
+        for txt, tip, cb in reversed([
+            ("tab-new-symbolic", "Nova aba", lambda *_: self.t("new-window")),
+            ("view-fullscreen-symbolic", "Zoom no painel", lambda *_: self.t("resize-pane", "-Z")),
+            ("window-close-symbolic", "Fechar painel", lambda *_: self.t("kill-pane"))]):
+            hb.pack_end(acao(txt, tip, cb))
+        hb.pack_end(lb)
+        hb.pack_end(acao("list-add-symbolic", "Novo painel (usa o layout escolhido)", lambda *_: self.add_pane("Shell", "")))
+        sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_top=8, margin_bottom=8)
+        hb.pack_end(sep)
+        hb.pack_end(acao("edit-delete-symbolic", "Remover projeto", self.on_remove, "perigo"))
+        hb.pack_end(acao("sidebar-show-right-symbolic", "Painel de agentes (Ctrl+J)", lambda *_: self.toggle_agents()))
+        hb.pack_end(acao("dialog-password-symbolic", "Segredos do projeto", lambda *_: self.on_secrets()))
+        self.win.set_titlebar(hb)
+
+        # --- sidebar (largura fixa, não expande)
+        self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, width_request=190, hexpand=False)
+        self.side.add_css_class("side")
+        t = Gtk.Label(label="PROJETOS", xalign=0, margin_start=16, margin_top=14, margin_bottom=8)
+        t.add_css_class("side-titulo")
+        self.list = Gtk.ListBox(); self.list.add_css_class("lista")
+        self.list.connect("row-activated", lambda lb, r: self.open(r.name))
+        sc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        sc.set_child(self.list)
+        novo = Gtk.Button(label="＋  Novo projeto"); novo.add_css_class("novo")
+        self.addpop = Gtk.Popover(); self.addpop.set_parent(novo)
+        ac = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=6, margin_bottom=6,
+                     margin_start=6, margin_end=6)
+        for nome, cb in [("Pasta local…", self.on_add), ("Servidor SSH / mosh…", self.on_add_remote)]:
+            b = Gtk.Button(label=nome, has_frame=False); b.get_child().set_xalign(0); b.add_css_class("pop-item")
+            b.connect("clicked", lambda _b, c=cb: (self.addpop.popdown(), c()))
+            ac.append(b)
+        self.addpop.set_child(ac)
+        novo.connect("clicked", lambda *_: self.addpop.popup())
+        # abas: Projetos (o que você mexe) | Repos (todos os repositórios git)
+        b1 = Gtk.ToggleButton(label="Projetos", active=True, hexpand=True); b1.add_css_class("tab")
+        b2 = Gtk.ToggleButton(label="Repos", group=b1, hexpand=True); b2.add_css_class("tab")
+        tabs = Gtk.Box(spacing=2); tabs.add_css_class("tabs"); tabs.append(b1); tabs.append(b2)
+        self.rlist = Gtk.ListBox(); self.rlist.add_css_class("lista")
+        self.rlist.connect("row-activated", lambda lb, r: self.open_repo(r.repo))
+        self.rlist.set_filter_func(self.repo_filter)
+        self.busca = Gtk.SearchEntry(placeholder_text="Buscar no GitHub…"); self.busca.add_css_class("busca")
+        self.busca.connect("search-changed", lambda *_: self.rlist.invalidate_filter())
+        self.rcount = Gtk.Label(label="", xalign=0, margin_start=14, margin_bottom=4); self.rcount.add_css_class("ag-sub")
+        rsc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER); rsc.set_child(self.rlist)
+        rbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        rh = Gtk.Box(); self.rcount.set_hexpand(True)
+        rf = Gtk.Button(icon_name="view-refresh-symbolic", has_frame=False, tooltip_text="Atualizar do GitHub", margin_end=8)
+        rf.connect("clicked", lambda *_: self.refresh_repos(True)); rh.append(self.rcount); rh.append(rf)
+        rbox.append(self.busca); rbox.append(rh); rbox.append(rsc)
+        self.sstack = Gtk.Stack(vexpand=True); self.sstack.add_named(sc, "proj"); self.sstack.add_named(rbox, "repo")
+        def tab(btn, nome):
+            def f(b):
+                if b.get_active():
+                    self.sstack.set_visible_child_name(nome)
+                    if nome == "repo": self.refresh_repos()
+            btn.connect("toggled", f)
+        tab(b1, "proj"); tab(b2, "repo")
+        self.tab_proj = b1; self.repos = []; self._repos_ts = 0
+        if os.environ.get("RAIDPOINT_TAB") == "repos": b2.set_active(True)
+        self.side.append(tabs); self.side.append(self.sstack); self.side.append(novo)
+
+        # --- terminais
+        self.stack = Gtk.Stack(hexpand=True, vexpand=True)
+        vazio = Gtk.Label(label="Adicione um projeto para começar"); vazio.add_css_class("vazio-t")
+        self.stack.add_named(vazio, "_vazio")
+
+        self.alist = Gtk.ListBox(); self.alist.add_css_class("lista")
+        self.alist.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.alist.connect("row-activated", lambda lb, r: getattr(r, "act", None) and r.act())
+        asc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER, width_request=280)
+        asc.set_child(self.alist); asc.add_css_class("side-right")
+        self.rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT, reveal_child=False)
+        self.rev.set_child(asc)
+        root = Gtk.Box(); root.append(self.side); root.append(self.stack); root.append(self.rev)
+        self.win.set_child(root)
+
+        a = Gio.SimpleAction.new("side", None); a.connect("activate", lambda *_: self.toggle_side())
+        self.add_action(a); self.set_accels_for_action("app.side", ["<Control>b"])
+        a2 = Gio.SimpleAction.new("agents", None); a2.connect("activate", lambda *_: self.toggle_agents())
+        self.add_action(a2); self.set_accels_for_action("app.agents", ["<Control>j"])
+        if os.environ.get("RAIDPOINT_AGENTS"): self.rev.set_reveal_child(True)
+        GLib.timeout_add_seconds(2, self.agents_tick)
+        GLib.timeout_add_seconds(1, self.req_tick)
+        GLib.timeout_add_seconds(10, self.git_tick); GLib.timeout_add_seconds(1, lambda: (self.git_tick(), False)[1])
+
+        self.refresh_list()
+        GLib.timeout_add_seconds(3, self.tick)
+        self.win.present()
+        self.refresh_repos()
+        db = load(); ns = self.names()
+        self.open(db.get("_last") if db.get("_last") in ns else (ns[0] if ns else None))
+
+    def toggle_side(self):
+        self.side.set_visible(not self.side.get_visible())
+
+    def names(self):
+        return [n for n in load() if not n.startswith("_")]
+
+    def refresh_list(self):
+        while (r := self.list.get_first_child()): self.list.remove(r)
+        self.rows = {}; on = alive()
+        for n in self.names():
+            row = Gtk.ListBoxRow(); row.name = n
+            box = Gtk.Box(spacing=10)
+            av = Gtk.Label(label=n[0].upper(), halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+            av.add_css_class("avatar")
+            p = Gtk.CssProvider(); p.load_from_string(f".av{abs(hash(n))} {{ background: {cor(n)}; }}")
+            av.add_css_class(f"av{abs(hash(n))}")
+            Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), p,
+                                                      Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+            nome = Gtk.Label(label=n, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+            nome.add_css_class("nome")
+            dot = Gtk.Label(label="●")
+            dot.add_css_class("ponto-remoto" if load()[n].get("host") else ("ponto-on" if n in on else "ponto-off"))
+            box.append(av); box.append(nome); box.append(dot)
+            row.set_child(box); self.list.append(row); self.rows[n] = (row, dot)
+            if n == self.cur: self.list.select_row(row)
+
+    def tick(self):
+        on = alive(); db = load()
+        for n, (_, dot) in self.rows.items():
+            if db.get(n, {}).get("host"): continue
+            dot.remove_css_class("ponto-on"); dot.remove_css_class("ponto-off")
+            dot.add_css_class("ponto-on" if n in on else "ponto-off")
+        return True
+
+    def open(self, name):
+        p = load().get(name) if name else None
+        if not p:
+            self.titulo.set_label("Raid Point"); return
+        if name not in self.terms:
+            term = Vte.Terminal(hexpand=True, vexpand=True)
+            term.set_scrollback_lines(0)
+            term.set_font(Pango.FontDescription(FONT))
+            fg, bg = Gdk.RGBA(), Gdk.RGBA(); fg.parse("#cdd6f4"); bg.parse("#1e1e2e")
+            pal = []
+            for h in ["#45475a","#f38ba8","#a6e3a1","#f9e2af","#89b4fa","#f5c2e7","#94e2d5","#bac2de",
+                      "#585b70","#f38ba8","#a6e3a1","#f9e2af","#89b4fa","#f5c2e7","#94e2d5","#a6adc8"]:
+                c = Gdk.RGBA(); c.parse(h); pal.append(c)
+            term.set_colors(fg, bg, pal)
+            term.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
+            term.connect("child-exited", lambda t, s, n=name: self.spawn(n))
+            self.terms[name] = term; self.stack.add_named(term, name); self.spawn(name)
+        self.cur = name
+        self.stack.set_visible_child_name(name)
+        self.terms[name].grab_focus()
+        d = load(); d["_last"] = name; save(d)
+        where = f"{p['host']}:{p.get('dir') or '~'}" if p.get("host") else p["dir"].replace(os.path.expanduser("~"), "~")
+        self.titulo.set_label(f"{name}  —  {where}")
+        if name in self.rows: self.list.select_row(self.rows[name][0])
+
+    def spawn(self, name):
+        p = load().get(name)
+        if not p or name not in self.terms: return
+        env = [f"{k}={v}" for k, v in os.environ.items() if k != "TMUX"]
+        env += ["TERM=xterm-256color", "COLORTERM=truecolor"]
+        if p.get("host"):
+            argv, cwd = remote_argv(name, p), os.path.expanduser("~")
+        else:
+            d = os.path.expanduser(p["dir"])
+            argv, cwd = TMUX + ["new-session", "-A", "-s", name, "-c", d], d
+        self.terms[name].spawn_async(Vte.PtyFlags.DEFAULT, cwd, argv, env,
+            GLib.SpawnFlags.SEARCH_PATH, None, None, -1, None, None)
+
+    def t(self, *cmd):
+        if not self.cur: return
+        d = pdir(self.cur)
+        extra = ["-c", d] if d and cmd[0] in ("split-window", "new-window") else []
+        run_tmux(self.cur, cmd[0], "-t", self.cur, *cmd[1:], *extra)
+        self.terms[self.cur].grab_focus()
+
+    def set_layout(self, lay):
+        self.layout = lay
+        if self.cur:
+            run_tmux(self.cur, "select-layout", "-t", self.cur, lay)
+            self.terms[self.cur].grab_focus()
+
+    def add_pane(self, title, cmd, worktree=False):
+        if not self.cur: return
+        proj = self.cur
+        def work():
+            core.spawn_pane(proj, title, cmd, worktree, self.layout)
+            GLib.idle_add(lambda: self.terms[proj].grab_focus())
+        threading.Thread(target=work, daemon=True).start()
+
+    def add_agent(self, ag):
+        self.add_pane(ag["name"], ag["cmd"], self.wt.get_active())
+
+    def toggle_sync(self):
+        if not self.cur: return
+        r = run_tmux(self.cur, "show-options", "-wv", "-t", self.cur, "synchronize-panes").stdout.strip()
+        novo = "off" if r == "on" else "on"
+        run_tmux(self.cur, "set-option", "-w", "-t", self.cur, "synchronize-panes", novo)
+        (self.sync.add_css_class if novo == "on" else self.sync.remove_css_class)("sync-on")
+        self.terms[self.cur].grab_focus()
+
+    # ---------- painel de agentes
+    def toggle_agents(self):
+        self.rev.set_reveal_child(not self.rev.get_reveal_child()); self._sig = None; self.agents_tick()
+
+    def agents_tick(self):
+        if self.cur and self.rev.get_reveal_child() and not self._busy:
+            self._busy = True; proj = self.cur
+            def work():
+                try: data = (core.list_panes(proj), core.sessions(proj), core.mem_recent(proj, 5))
+                except Exception: data = ([], {}, [])
+                GLib.idle_add(self.render_agents, proj, *data)
+            threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def render_agents(self, proj, panes, sess, mems):
+        self._busy = False
+        if proj != self.cur: return False
+        now = time.time()
+        sess = {k: v for k, v in sess.items() if v["status"] != "ended" or now - v["last"] < 600}
+        sig = json.dumps([[p["id"], p["title"], p["cmd"], p["idle_s"] < 4, p["active"]] for p in panes] +
+                         [[v["id"], v["status"], [(a["id"], a["end"] is None) for a in v["subs"].values()]] for v in sess.values()] +
+                         [m["path"] for m in mems])
+        if sig == self._sig: return False
+        self._sig = sig
+        while (r := self.alist.get_first_child()): self.alist.remove(r)
+        esc = GLib.markup_escape_text
+        def row(markup, act=None, css="ag-row", indent=8):
+            r = Gtk.ListBoxRow(); r.act = act
+            l = Gtk.Label(use_markup=True, label=markup, xalign=0, wrap=True, margin_start=indent, margin_end=6,
+                          margin_top=3, margin_bottom=3)
+            l.add_css_class(css); r.set_child(l); r.set_activatable(act is not None); self.alist.append(r)
+        def sec(t):
+            r = Gtk.ListBoxRow(); r.set_activatable(False)
+            l = Gtk.Label(label=t, xalign=0); l.add_css_class("ag-sec"); r.set_child(l); self.alist.append(r)
+        COR = {"working": "#a6e3a1", "idle": "#6c7086", "waiting": "#f9e2af", "ended": "#45475a"}
+        sec("PAINÉIS")
+        for p in panes:
+            st = "working" if p["idle_s"] < 4 else "idle"
+            row(f'<span foreground="{COR[st]}">●</span>  <b>{esc(p["title"])}</b>  <span foreground="#6c7086">{esc(p["cmd"])}</span>',
+                lambda p=p: self.focus_pane(proj, p))
+        if sess: sec("SESSÕES DE IA")
+        for v in sess.values():
+            nome = os.path.basename(v["cwd"] or "") or "?"
+            prompt = f'\n<span foreground="#6c7086">{esc(v["prompt"])}</span>' if v["prompt"] and v["status"] == "working" else ""
+            row(f'<span foreground="{COR[v["status"]]}">◆</span>  <b>{esc(v["harness"])}</b>  {esc(nome)}  '
+                f'<span foreground="#6c7086">{v["status"]}</span>{prompt}',
+                (lambda v=v: self.open_transcript(v["transcript"], v["id"])) if v["transcript"] else None)
+            for a in v["subs"].values():
+                run = a["end"] is None
+                dur = "rodando" if run else f'{int(a["end"] - a["start"])}s'
+                row(f'<span foreground="{COR["working" if run else "ended"]}">↳</span> {esc(a["type"])}  '
+                    f'<span foreground="#6c7086">{dur}</span>',
+                    (lambda a=a: self.open_transcript(a["transcript"], a["id"])) if a["transcript"] else None, "ag-sub", 24)
+        if mems:
+            sec("MEMÓRIA")
+            for m in mems: row(f'<span foreground="#cba6f7">{esc(m["kind"])}</span>  {esc(m["text"][:90])}', None, "ag-sub")
+        return False
+
+    def focus_pane(self, proj, p):
+        def work():
+            core.run_tmux(proj, "select-window", "-t", f"{proj}:{p['window']}")
+            core.run_tmux(proj, "select-pane", "-t", p["id"])
+        threading.Thread(target=work, daemon=True).start()
+        if proj in self.terms: self.terms[proj].grab_focus()
+
+    def open_transcript(self, path, sid):
+        if path and os.path.exists(path):
+            self.add_pane(f"log {sid[:6]}", f"{RAIDPOINT} transcript {shlex.quote(path)} -f")
+
+    # ---------- git / PR
+    def git_tick(self):
+        proj = self.cur; p = load().get(proj) if proj else None
+        if not p or p.get("host"):
+            self.sub.set_label("" if not p else "servidor remoto"); return True
+        d = os.path.expanduser(p["dir"])
+        def work():
+            try: txt = git_summary(d, self.pr_cache, proj)
+            except Exception: txt = ""
+            GLib.idle_add(lambda: self.sub.set_label(txt) if self.cur == proj else None)
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    # ---------- pedidos de aprovação dos agentes (MCP)
+    def req_tick(self):
+        if self._asking: return True
+        for f in sorted(core.REQDIR.glob("*.json")):
+            try: r = json.loads(f.read_text())
+            except Exception: continue
+            if r.get("status") != "pending": continue
+            if time.time() - r.get("ts", 0) > 130:
+                f.unlink(missing_ok=True); continue
+            self._asking = True; self.ask(f, r); break
+        return True
+
+    def ask(self, f, r):
+        self.win.present()
+        n = Gio.Notification.new("Raid Point: um agente pede permissão"); n.set_body(f"Projeto {r['project']}")
+        self.send_notification("req", n)
+        titulos = {"secret": "Um agente quer usar segredos", "spawn": "Um agente quer abrir um shell",
+                   "send": "Um agente quer escrever num shell"}
+        dlg = Gtk.AlertDialog(message=titulos.get(r["kind"], "Pedido de um agente"),
+                              detail=f"Projeto: {r['project']}\n\n{r['detail']}",
+                              buttons=["Negar", "Permitir uma vez"], cancel_button=0, default_button=0)
+        def done(d, res):
+            try: ok = d.choose_finish(res) == 1
+            except GLib.Error: ok = False
+            try:
+                if f.exists():
+                    r["status"] = "approved" if ok else "denied"; f.write_text(json.dumps(r))
+            except Exception: pass
+            self._asking = False
+        dlg.choose(self.win, None, done)
+
+    # ---------- segredos
+    def on_secrets(self, *_):
+        if not self.cur: return
+        proj = self.cur
+        w = Gtk.Window(title=f"Segredos — {proj}", transient_for=self.win, modal=True, default_width=400, default_height=420)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=14, margin_bottom=14, margin_start=14, margin_end=14)
+        info = Gtk.Label(label="Os agentes só veem os NOMES. O valor entra no ambiente de um comando, "
+                               "depois que você aprova, e é mascarado na saída.", wrap=True, xalign=0)
+        info.add_css_class("ag-sub")
+        lst = Gtk.ListBox(); lst.add_css_class("lista")
+        sc = Gtk.ScrolledWindow(vexpand=True); sc.set_child(lst)
+        nome = Gtk.Entry(placeholder_text="NOME_DA_VARIAVEL")
+        valor = Gtk.PasswordEntry(placeholder_text="valor", show_peek_icon=True)
+        ok = Gtk.Button(label="Salvar segredo"); ok.add_css_class("agente")
+        def fill():
+            while (r := lst.get_first_child()): lst.remove(r)
+            for n in core.secret_names(proj):
+                r = Gtk.ListBoxRow(); h = Gtk.Box(spacing=8)
+                h.append(Gtk.Label(label=n, xalign=0, hexpand=True))
+                b = Gtk.Button(icon_name="edit-delete-symbolic", has_frame=False)
+                b.connect("clicked", lambda _b, n=n: (core.secret_rm(proj, n), fill()))
+                h.append(b); r.set_child(h); lst.append(r)
+        def save_(*_):
+            n, v = nome.get_text().strip(), valor.get_text()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", n) and v:
+                core.secret_set(proj, n, v); nome.set_text(""); valor.set_text(""); fill()
+        ok.connect("clicked", save_)
+        for x in (info, sc, nome, valor, ok): box.append(x)
+        w.set_child(box); fill(); w.present()
+
+    # ---------- repositórios do GitHub (clonados sob demanda em ~/.raid_point/workspaces/<repo>)
+    def repo_filter(self, row):
+        q = self.busca.get_text().strip().lower(); r = row.repo
+        return not q or q in r["nameWithOwner"].lower() or q in (r.get("description") or "").lower()
+
+    def refresh_repos(self, force=False):
+        if not force and time.time() - self._repos_ts < 300 and self.repos: return
+        self._repos_ts = time.time(); self.rcount.set_label("carregando do GitHub…")
+        def work():
+            try:
+                ok = core.gh_ok(); repos = core.gh_repos(force) if ok else []
+            except Exception:
+                ok, repos = False, []
+            GLib.idle_add(self.render_repos, repos, ok)
+        threading.Thread(target=work, daemon=True).start()
+
+    def render_repos(self, repos, ok=True):
+        while (r := self.rlist.get_first_child()): self.rlist.remove(r)
+        if not ok:
+            self.rcount.set_label("GitHub: rode `gh auth login` no terminal"); return False
+        self.repos = repos
+        projdirs = {os.path.realpath(os.path.expanduser(p.get("dir", ""))) for p in load().values()
+                    if isinstance(p, dict) and not p.get("host")}
+        for rp in repos:
+            row = Gtk.ListBoxRow(); row.repo = rp; row.set_tooltip_text(rp.get("description") or rp["nameWithOwner"])
+            box = Gtk.Box(spacing=10)
+            av = Gtk.Label(label=rp["name"][0].upper(), halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+            av.add_css_class("avatar")
+            cls = f"av{abs(hash(rp['name']))}"
+            p = Gtk.CssProvider(); p.load_from_string(f".{cls} {{ background: {cor(rp['name'])}; }}")
+            Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), p, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
+            av.add_css_class(cls)
+            txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+            n = Gtk.Label(label=rp["name"], xalign=0, ellipsize=Pango.EllipsizeMode.END); n.add_css_class("nome")
+            pa = Gtk.Label(label=rp["owner"] + (" · privado" if rp.get("isPrivate") else ""), xalign=0,
+                           ellipsize=Pango.EllipsizeMode.END); pa.add_css_class("repo-pai")
+            txt.append(n); txt.append(pa); box.append(av); box.append(txt)
+            wp = core.workspace_path(rp["nameWithOwner"])
+            if os.path.realpath(str(wp)) in projdirs:
+                d = Gtk.Label(label="●", tooltip_text="já é um projeto"); d.add_css_class("ponto-proj"); box.append(d)
+            elif not (wp / ".git").exists():
+                d = Gtk.Label(label="↓", tooltip_text="ainda não clonado: será clonado ao abrir"); d.add_css_class("repo-pai"); box.append(d)
+            row.set_child(box); self.rlist.append(row)
+        self.rcount.set_label(f"{len(repos)} repositórios no GitHub")
+        return False
+
+    def open_repo(self, rp):
+        """clona (se preciso) em ~/.raid_point/workspaces/<repo>, vira projeto e abre"""
+        nwo = rp["nameWithOwner"]; self.rcount.set_label(f"abrindo {rp['name']}…")
+        def work():
+            path, err = core.ensure_workspace(nwo)
+            GLib.idle_add(self.after_clone, rp, path, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def after_clone(self, rp, path, err):
+        self.rcount.set_label(f"{len(self.repos)} repositórios no GitHub")
+        if err or not path:
+            Gtk.AlertDialog(message="Não consegui clonar o repositório", detail=f"{rp['nameWithOwner']}\n\n{err}").show(self.win)
+            return False
+        db = load()
+        name = next((n for n, p in db.items() if isinstance(p, dict) and not p.get("host")
+                     and os.path.realpath(os.path.expanduser(p.get("dir", ""))) == os.path.realpath(path)), None)
+        if not name:
+            name = rp["name"]
+            if name in db: name = f"{rp['owner']}-{rp['name']}"
+            db[name] = {"dir": path, "startup": [], "github": rp["nameWithOwner"]}; save(db)
+        self.refresh_list(); self.tab_proj.set_active(True); self.open(name); self._repos_ts = 0
+        return False
+
+    def add_project_dir(self, path):
+        name = os.path.basename(path.rstrip("/")) or "projeto"
+        db = load(); db[name] = {"dir": path, "startup": []}; save(db)
+        self.refresh_list(); self.open(name); self._repos_ts = 0
+
+    def on_add(self, *_):
+        dlg = Gtk.FileDialog(title="Pasta do projeto")
+        def done(d, res):
+            try: f = d.select_folder_finish(res)
+            except GLib.Error: return
+            path = f.get_path()
+            if core.git_root(path):
+                self.add_project_dir(path); return
+            q = Gtk.AlertDialog(message="Esta pasta não é um repositório git",
+                                detail="Projetos do Raid Point são baseados em git (histórico, worktree por agente, PRs). "
+                                       "Inicializar um repositório aqui?",
+                                buttons=["Cancelar", "git init"], cancel_button=0, default_button=1)
+            def d2(dd, rr):
+                try: ok = dd.choose_finish(rr) == 1
+                except GLib.Error: return
+                if ok:
+                    subprocess.run(["git", "-C", path, "init"], capture_output=True)
+                    self.add_project_dir(path)
+            q.choose(self.win, None, d2)
+        dlg.select_folder(self.win, None, done)
+
+    def on_add_remote(self, *_):
+        hosts = ssh_hosts()
+        if not hosts:
+            return
+        w = Gtk.Window(title="Servidor remoto", transient_for=self.win, modal=True, default_width=380)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=18, margin_bottom=18,
+                      margin_start=18, margin_end=18)
+        host = Gtk.DropDown.new_from_strings(hosts)
+        nome = Gtk.Entry(placeholder_text="Nome do projeto (padrão: nome do host)")
+        pasta = Gtk.Entry(placeholder_text="Pasta no servidor (opcional)")
+        trans = Gtk.DropDown.new_from_strings(["mosh", "ssh"] if shutil.which("mosh") else ["ssh"])
+        ok = Gtk.Button(label="Conectar"); ok.add_css_class("agente")
+        for lab, wd in [("Servidor (do ~/.ssh/config)", host), ("Nome", nome), ("Pasta", pasta), ("Conexão", trans)]:
+            l = Gtk.Label(label=lab, xalign=0); l.add_css_class("side-titulo"); box.append(l); box.append(wd)
+        box.append(ok); w.set_child(box)
+        def go(*_):
+            h = hosts[host.get_selected()]
+            n = nome.get_text().strip() or h
+            db = load()
+            db[n] = {"dir": pasta.get_text().strip(), "host": h,
+                     "transport": trans.get_selected_item().get_string(), "startup": []}
+            save(db); w.close(); self.refresh_list(); self.open(n)
+        ok.connect("clicked", go); w.present()
+
+    def on_remove(self, *_):
+        if not self.cur: return
+        name = self.cur
+        dlg = Gtk.AlertDialog(message=f"Remover '{name}'?",
+                              detail="Isso encerra os terminais desse projeto.",
+                              buttons=["Cancelar", "Remover"], cancel_button=0, default_button=0)
+        def done(d, res):
+            try:
+                if d.choose_finish(res) != 1: return
+            except GLib.Error: return
+            if not load().get(name, {}).get("host"):
+                tmux("kill-session", "-t", name)
+            db = load(); db.pop(name, None); save(db)
+            t = self.terms.pop(name, None)
+            if t: self.stack.remove(t)
+            self.cur = None; self.stack.set_visible_child_name("_vazio")
+            self.titulo.set_label("Raid Point"); self.refresh_list()
+        dlg.choose(self.win, None, done)
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv))
