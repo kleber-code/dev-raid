@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Instala o Raid Point: links em ~/.local/bin + entrada no menu. Dados ficam em ~/.raid_point
+# Instala o /dev/raid: links em ~/.local/bin + entrada no menu. Dados ficam em ~/.raid_point
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN" "$HOME/.local/share/applications" "$HOME/.raid_point"
 ln -sf "$DIR/bin/raid-point" "$BIN/raid-point"
 ln -sf "$DIR/bin/raidpoint" "$BIN/raidpoint"
+ln -sf "$DIR/bin/raid-point" "$BIN/devraid"
 sed "s|@BIN@|$BIN|" "$DIR/desktop/raid-point.desktop" > "$HOME/.local/share/applications/raid-point.desktop"
 
 falta=()

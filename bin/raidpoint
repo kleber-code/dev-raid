@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""raidpoint - CLI do Raid Point: hook de eventos, servidor MCP, memória, segredos, instalação.
+"""raidpoint - CLI do /dev/raid: hook de eventos, servidor MCP, memória, segredos, instalação.
 
   raidpoint [abrir] <projeto>    abre/volta ao projeto no terminal (tmux)
   raidpoint ls | add <nome> [dir] | rm <nome> | kill <nome> | stop
@@ -9,6 +9,9 @@
   raidpoint mcp                  servidor MCP stdio (list_agents, spawn_agent, send_message, ...)
   raidpoint mem add|search|recent|reindex ...
   raidpoint secret set|list|rm <projeto> [NOME]
+  raidpoint usage                uso de tokens do Claude Code (5h / 24h / 7d, por projeto)
+  raidpoint statusline           (stdin JSON do Claude Code) grava limites do plano e imprime "5h x% · 7d y%"
+  raidpoint install-statusline   ativa o statusLine no Claude Code (só se você não tiver um)
   raidpoint events               últimos eventos
   raidpoint transcript <arq> [-f]
   raidpoint install              registra hooks + MCP no Claude Code e Codex
@@ -30,15 +33,17 @@ def cmd_hook():
         cwd = d.get("cwd") or os.getcwd()
         proj = core.project_for_cwd(cwd)
         ev = d.get("hook_event_name", "?")
+        if not isinstance(ev, str): return
         core.log_event({"harness": "claude", "event": ev, "session_id": d.get("session_id"), "cwd": cwd,
                         "project": proj, "transcript": d.get("transcript_path"),
                         "agent_id": d.get("agent_id"), "agent_type": d.get("agent_type"),
                         "agent_transcript": d.get("agent_transcript_path"),
-                        "prompt": (d.get("prompt") or "")[:80] if ev == "UserPromptSubmit" else None})
+                        "prompt": (d.get("prompt") or "")[:80] if ev == "UserPromptSubmit" else None,
+                        "message": (d.get("message") or "")[:200] if ev == "Notification" else None})
         if ev == "SessionStart" and proj:
             mems = core.mem_recent(proj, 8)
             if mems:
-                print(f"# Memória do projeto '{proj}' (Raid Point)\n"
+                print(f"# Memória do projeto '{proj}' (/dev/raid)\n"
                       "Use as ferramentas MCP raidpoint.memory_search / memory_add para consultar e registrar decisões.\n")
                 for m in mems:
                     print(f"- [{m['kind']}] {m['text'][:240]}")
@@ -61,9 +66,21 @@ def t_list_repos(a):
              "cloned": (core.workspace_path(r["nameWithOwner"]) / ".git").exists()} for r in core.gh_repos()]
 
 def t_open_repo(a):
+    core.check_nwo(a.get("repo", ""))
     path, err = core.ensure_workspace(a["repo"])
     if err: raise ValueError(err)
     return {"workspace": path}
+
+def t_usage(a):
+    S = core.usage_summary()
+    return {w: {k: v for k, v in o.items() if k not in ("by_project", "by_model")} | {
+        "top_projects": dict(sorted(o["by_project"].items(), key=lambda x: -x[1])[:5])} for w, o in S.items()} | {
+        "note": "novos = entrada + saída + cache criado (tokens); não é o limite do plano"}
+
+def t_ci_status(a):
+    g = core.git_detail_cached(core.pdir(_proj(a)), ttl=20)
+    if not g: raise ValueError("o projeto não é um repositório git")
+    return g
 
 def t_list_agents(a):
     p = _proj(a)
@@ -82,8 +99,8 @@ def t_spawn_agent(a):
     if not ag: raise ValueError(f"agente desconhecido; opções: {[x['name'] for x in core.agents_cfg()]}")
     if not ag["cmd"] and not core.ask_approval("spawn", p, "Abrir um painel de SHELL puro"):
         return {"error": "negado pelo usuário"}
-    pid, d = core.spawn_pane(p, ag["name"], ag["cmd"], bool(a.get("worktree")))
-    if not pid: return {"error": "não consegui criar o painel (sessão do projeto aberta no Raid Point?)"}
+    pid, d, err = core.spawn_pane(p, ag["name"], ag["cmd"], bool(a.get("worktree")))
+    if not pid: return {"error": err or "não consegui criar o painel (a sessão do projeto está aberta no /dev/raid?)"}
     if a.get("prompt") and ag["cmd"]:
         time.sleep(4)
         core.run_tmux(p, "send-keys", "-t", pid, "-l", a["prompt"]); core.run_tmux(p, "send-keys", "-t", pid, "Enter")
@@ -93,8 +110,13 @@ def t_send_message(a):
     p = _proj(a)
     pid = core.resolve_pane(p, a.get("target", ""))
     if not pid: raise ValueError("painel não encontrado (use id ou título de list_agents)")
-    pane = next(x for x in core.list_panes(p) if x["id"] == pid)
-    if pane["cmd"] in SHELLS and not core.ask_approval("send", p, f"Enviar a um SHELL ({pane['title']}):\n{a['text'][:300]}"):
+    pane = next((x for x in core.list_panes(p) if x["id"] == pid), None)
+    if not pane: raise ValueError("painel não encontrado")
+    # só vai direto para painéis de AGENTE (aberto pelo /dev/raid, com o nome de um preset que não seja Shell);
+    # qualquer outro (shell, ssh, python, node...) pede aprovação, porque aceitaria o texto como comando
+    agentes = {x["name"].lower() for x in core.agents_cfg() if x.get("cmd")}
+    if not (pane["title"].lower() in agentes and pane["cmd"] not in SHELLS) and not core.ask_approval(
+            "send", p, f"Enviar texto ao painel '{pane['title']}' (rodando {pane['cmd']}):\n{a['text'][:300]}"):
         return {"error": "negado pelo usuário"}
     core.run_tmux(p, "send-keys", "-t", pid, "-l", a["text"])
     if a.get("enter", True): core.run_tmux(p, "send-keys", "-t", pid, "Enter")
@@ -110,7 +132,9 @@ def t_read_output(a):
     return {"output": core.redact(out, vals)}
 
 def t_memory_add(a):
-    return {"saved": core.mem_add(_proj(a), a["text"], a.get("kind", "note"), a.get("tags", ""))}
+    text = (a.get("text") or "").strip()
+    if not text: raise ValueError("texto vazio")
+    return {"saved": core.mem_add(_proj(a), text[:4000], a.get("kind", "note"), a.get("tags", ""))}
 
 def t_memory_search(a):
     return core.mem_search(_proj(a), a["query"], int(a.get("limit", 8)))
@@ -124,13 +148,15 @@ def t_secret_names(a):
 def t_run_with_secrets(a):
     return core.run_with_secrets(_proj(a), a["command"], a.get("secrets", []), a.get("purpose", ""))
 
-_P = {"project": {"type": "string", "description": "nome do projeto Raid Point (opcional se o cwd estiver dentro de um)"}}
+_P = {"project": {"type": "string", "description": "nome do projeto /dev/raid (opcional se o cwd estiver dentro de um)"}}
 def _s(props, req=()):
     return {"type": "object", "properties": {**_P, **props}, "required": list(req)}
 TOOLS = {
-    "list_projects": ("Lista os projetos do Raid Point", _s({}), t_list_projects),
+    "list_projects": ("Lista os projetos do /dev/raid", _s({}), t_list_projects),
     "list_repos": ("Lista os repositórios do GitHub do usuário/orgs", _s({}), t_list_repos),
     "open_repo": ("Clona o repositório (dono/nome) em ~/.raid_point/workspaces/<repo> e devolve o caminho", _s({"repo": {"type": "string"}}, ["repo"]), t_open_repo),
+    "usage": ("Uso de tokens do Claude Code nas últimas 5h/24h/7d (a partir dos transcripts locais)", _s({}), t_usage),
+    "ci_status": ("Branch, últimos commits e execuções do GitHub Actions (CI) do projeto", _s({}), t_ci_status),
     "list_agents": ("Lista painéis/agentes, sessões de IA e subagentes de um projeto", _s({}), t_list_agents),
     "spawn_agent": ("Abre um agente (preset do agents.json) em novo painel; worktree=true isola em git worktree",
                     _s({"agent": {"type": "string"}, "worktree": {"type": "boolean"}, "prompt": {"type": "string"}}, ["agent"]), t_spawn_agent),
@@ -153,29 +179,39 @@ def cmd_mcp():
     for line in sys.stdin:
         try: m = json.loads(line)
         except Exception: continue
+        if not isinstance(m, dict): continue
         i, meth = m.get("id"), m.get("method")
-        if meth == "initialize":
-            send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": m["params"].get("protocolVersion", "2024-11-05"),
-                  "capabilities": {"tools": {}}, "serverInfo": {"name": "raidpoint", "version": "0.2"}}})
-        elif meth == "tools/list":
-            send({"jsonrpc": "2.0", "id": i, "result": {"tools": [
-                {"name": n, "description": d, "inputSchema": sc} for n, (d, sc, _) in TOOLS.items()]}})
-        elif meth == "tools/call":
-            n, a = m["params"]["name"], m["params"].get("arguments") or {}
-            try:
-                res = TOOLS[n][2](a); err = False
-            except Exception as e:
-                res, err = {"error": str(e)}, True
-            send({"jsonrpc": "2.0", "id": i, "result": {"isError": err or (isinstance(res, dict) and "error" in res),
-                  "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=1, default=str)}]}})
-        elif i is not None:
-            send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "método desconhecido"}})
+        try:
+            params = m.get("params") or {}
+            if meth == "initialize":
+                send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                      "capabilities": {"tools": {}}, "serverInfo": {"name": "raidpoint", "version": "0.3"}}})
+            elif meth == "ping":
+                send({"jsonrpc": "2.0", "id": i, "result": {}})
+            elif meth == "tools/list":
+                send({"jsonrpc": "2.0", "id": i, "result": {"tools": [
+                    {"name": n, "description": d, "inputSchema": sc} for n, (d, sc, _) in TOOLS.items()]}})
+            elif meth == "tools/call":
+                n, a = params.get("name"), params.get("arguments") or {}
+                try:
+                    if n not in TOOLS: raise ValueError(f"ferramenta desconhecida: {n}")
+                    res = TOOLS[n][2](a); err = False
+                except Exception as e:
+                    res, err = {"error": str(e)}, True
+                send({"jsonrpc": "2.0", "id": i, "result": {"isError": err or (isinstance(res, dict) and "error" in res),
+                      "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=1, default=str)}]}})
+            elif i is not None:
+                send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "método desconhecido"}})
+        except Exception as e:                                   # nunca derruba o servidor
+            if i is not None:
+                send({"jsonrpc": "2.0", "id": i, "error": {"code": -32603, "message": f"erro interno: {e}"}})
 
 # ------------------------------------------------------------------ CLI auxiliar
 def cmd_mem(a):
     sub = a[0] if a else ""
     if sub == "reindex": core.mem_reindex(); print("ok"); return
     proj = a[1] if len(a) > 1 else core.project_for_cwd(os.getcwd())
+    if not proj: sys.exit("projeto indefinido: rode dentro da pasta de um projeto ou passe o nome (raidpoint mem <add|search|recent> <projeto> ...)")
     if sub == "add": print(core.mem_add(proj, " ".join(a[2:])))
     elif sub == "search":
         for m in core.mem_search(proj, " ".join(a[2:])): print(f"[{m['kind']}] {m['ts']}  {m['text'][:200]}")
@@ -224,7 +260,7 @@ def cmd_install():
         lst = hooks.setdefault(ev, [])
         if not any(cmd in h.get("command", "") for g in lst for h in g.get("hooks", [])):
             lst.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
-    json.dump(s, open(sp, "w"), indent=2, ensure_ascii=False)
+    core.write_json_atomic(sp, s)
     print("hooks do Claude Code: ok (backup em settings.json.raidpoint.bak)")
     # 2) MCP no Claude Code
     subprocess.run(["claude", "mcp", "remove", "--scope", "user", "termos"], capture_output=True)
@@ -240,49 +276,66 @@ def cmd_install():
         open(cp, "w").write(t); print("MCP Codex: ok")
 
 # ------------------------------------------------------------------ projetos (terminal)
-def _db():
-    try: return json.load(open(core.CFG / "projects.json"))
-    except Exception: return {}
-
-def _save(d): json.dump(d, open(core.CFG / "projects.json", "w"), indent=2, ensure_ascii=False)
-
-def _alive():
-    r = subprocess.run(core.TMUX + ["list-sessions", "-F", "#{session_name}"], text=True, capture_output=True)
-    return set(r.stdout.split()) if r.returncode == 0 else set()
-
 def cmd_ls():
-    on = _alive()
+    on = core.alive()
     for n, p in core.load_projects().items():
-        print(f"{'●' if n in on else '○'} {n:<22} {p.get('host', '') + ':' if p.get('host') else ''}{p.get('dir', '')}")
+        print(f"{'●' if core.sess(n) in on else '○'} {n:<22} {p.get('host', '') + ':' if p.get('host') else ''}{p.get('dir', '')}")
 
 def cmd_add(a):
-    name = a[0]; d = os.path.abspath(os.path.expanduser(a[1])) if len(a) > 1 else os.getcwd()
+    name = core.safe_name(a[0]); d = os.path.abspath(os.path.expanduser(a[1])) if len(a) > 1 else os.getcwd()
     if subprocess.run(["git", "-C", d, "rev-parse"], capture_output=True).returncode != 0:
         if input(f"{d} não é um repositório git. Inicializar? [s/N] ").strip().lower() != "s":
-            sys.exit("projetos do Raid Point precisam ser git. Abortado.")
+            sys.exit("projetos do /dev/raid precisam ser git. Abortado.")
         subprocess.run(["git", "-C", d, "init"], check=True)
-    db = _db(); db[name] = {"dir": d, "startup": []}; _save(db); print(f"ok: {name} -> {d}")
+    core.update_projects(lambda db: db.__setitem__(name, {"dir": d, "startup": []}))
+    print(f"ok: {name} -> {d}")
 
 def cmd_open(name):
     p = core.load_projects().get(name)
     if not p: sys.exit(f"projeto '{name}' não existe. Use: raidpoint add {name} [dir]")
     if p.get("host"):
-        import shlex
-        tm = ["tmux", "new-session", "-A", "-s", name] + (["-c", p["dir"]] if p.get("dir") else []) + [";", "set", "-g", "mouse", "on"]
-        if p.get("transport", "mosh") == "mosh" and shutil.which("mosh"):
-            os.execvp("mosh", ["mosh", p["host"], "--"] + tm)
-        os.execvp("ssh", ["ssh", "-t", p["host"], shlex.join(tm)])
+        argv = core.remote_argv(name, p)
+        os.execvp(argv[0], argv)
     d = os.path.expanduser(p["dir"])
-    if name not in _alive():
-        subprocess.run(core.TMUX + ["new-session", "-d", "-s", name, "-c", d], check=True)
-    verb = "switch-client" if "/tp," in os.environ.get("TMUX", "") else "attach-session"
-    os.execvp("tmux", core.TMUX + [verb, "-t", name])
+    if core.sess(name) not in core.alive():
+        subprocess.run(core.TMUX + ["new-session", "-d", "-s", core.sess(name), "-c", d], check=True)
+    verb = "switch-client" if f"/{core.SOCKET}," in os.environ.get("TMUX", "") else "attach-session"
+    os.execvp("tmux", core.TMUX + [verb, "-t", core.sess_t(name)])
 
 def cmd_open_repo(nwo):
     path, err = core.ensure_workspace(nwo)
     if err: sys.exit(err)
-    name = nwo.split("/")[1]; db = _db()
-    db.setdefault(name, {"dir": path, "startup": [], "github": nwo}); _save(db); print(f"{name} -> {path}")
+    name = core.unique_name(core.safe_name(nwo.split("/")[1]), taken_dir=path)
+    core.update_projects(lambda db: db.setdefault(name, {"dir": path, "startup": [], "github": nwo}))
+    print(f"{name} -> {path}")
+
+def cmd_statusline():
+    """statusLine do Claude Code: recebe o JSON por stdin; guarda rate_limits e imprime uma linha curta"""
+    try: d = json.load(sys.stdin)
+    except Exception: return
+    rl = d.get("rate_limits") or {}
+    f, w = rl.get("five_hour"), rl.get("seven_day")
+    try:
+        if f or w:
+            tmp = core.PLAN_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"ts": time.time(), "five_hour": f, "seven_day": w,
+                                       "session_id": d.get("session_id"), "model": (d.get("model") or {}).get("display_name")}))
+            os.replace(tmp, core.PLAN_FILE)
+    except Exception: pass
+    parts = []
+    if f and f.get("used_percentage") is not None: parts.append(f"5h {f['used_percentage']:.0f}%")
+    if w and w.get("used_percentage") is not None: parts.append(f"7d {w['used_percentage']:.0f}%")
+    if parts: print(" · ".join(parts))
+
+def cmd_install_statusline():
+    sp = os.path.expanduser("~/.claude/settings.json")
+    s = json.load(open(sp))
+    if s.get("statusLine"):
+        sys.exit(f"você já tem um statusLine configurado: {s['statusLine']}. Não vou sobrescrever.")
+    shutil.copy(sp, sp + ".statusline.bak")
+    s["statusLine"] = {"type": "command", "command": f"{SELF} statusline"}
+    core.write_json_atomic(sp, s)
+    print("statusLine ativado (backup em settings.json.statusline.bak). Vale para sessões novas do Claude Code.")
 
 def main():
     a = sys.argv[1:]
@@ -295,15 +348,28 @@ def main():
     elif c == "install": cmd_install()
     elif c == "ls": cmd_ls()
     elif c == "add" and len(a) > 1: cmd_add(a[1:])
-    elif c == "rm" and len(a) == 2:
-        db = _db(); db.pop(a[1], None); _save(db)
-    elif c == "kill" and len(a) == 2: subprocess.run(core.TMUX + ["kill-session", "-t", a[1]])
+    elif c == "rm" and len(a) == 2: core.update_projects(lambda db: db.pop(a[1], None))
+    elif c == "kill" and len(a) == 2: subprocess.run(core.TMUX + ["kill-session", "-t", core.sess_t(a[1])])
     elif c == "stop": subprocess.run(core.TMUX + ["kill-server"])
     elif c == "repos":
         if not core.gh_ok(): sys.exit("gh não autenticado: rode `gh auth login`")
         for r in core.gh_repos(force=True):
             print(f"{'●' if (core.workspace_path(r['nameWithOwner']) / '.git').exists() else '○'} {r['nameWithOwner']:<40} {'privado' if r['isPrivate'] else ''}")
     elif c == "open-repo" and len(a) == 2: cmd_open_repo(a[1])
+    elif c == "statusline": cmd_statusline()
+    elif c == "install-statusline": cmd_install_statusline()
+    elif c == "usage":
+        S = core.usage_summary(); f = core.fmt_tokens
+        for w, o in S.items():
+            print(f"{w:>3}  novos {f(o['new']):>7}  saída {f(o['out']):>6}  cache lido {f(o['cache_read']):>7}  {o['msgs']} msgs")
+        pl = core.plan_status()
+        if pl and (pl.get("five_hour") or pl.get("seven_day")):
+            for nome, k in (("5h", "five_hour"), ("semana", "seven_day")):
+                w = pl.get(k)
+                if w: print(f"plano {nome}: {w.get('used_percentage', 0):.0f}% usado, reseta {time.strftime('%d/%m %H:%M', time.localtime(w['resets_at']))}  (dado de {int(pl['age_s'] // 60)} min atrás)")
+        else: print("plano: sem dados (ative com `raidpoint install-statusline`)")
+        print("\npor projeto (7d):")
+        for p, n in sorted(S["7d"]["by_project"].items(), key=lambda x: -x[1])[:8]: print(f"  {p:<24} {f(n):>7}")
     elif c == "events":
         for e in core.read_events()[-30:]: print(time.strftime("%H:%M:%S", time.localtime(e["ts"])), e.get("event"), e.get("project"), e.get("agent_type") or "", e.get("session_id", "")[:8])
     elif c in ("-h", "--help", "help", ""): print(__doc__)

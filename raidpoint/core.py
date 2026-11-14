@@ -1,5 +1,5 @@
-"""Núcleo compartilhado do Raid Point: projetos, eventos, memória, segredos, tmux (local/remoto)."""
-import json, os, re, shlex, shutil, sqlite3, subprocess, time, uuid
+"""Núcleo compartilhado do /dev/raid: projetos, eventos, memória, segredos, tmux (local/remoto)."""
+import fcntl, json, os, re, shlex, shutil, sqlite3, subprocess, time, uuid
 from pathlib import Path
 
 HOME = Path(os.environ.get("RAIDPOINT_HOME", Path.home() / ".raid_point"))
@@ -16,15 +16,105 @@ _defaults = Path(__file__).resolve().parent.parent / "config"
 for _f in ("tmux.conf", "agents.json"):
     if not (CFG / _f).exists() and (_defaults / _f).exists():
         shutil.copy(_defaults / _f, CFG / _f)
-TMUX = ["tmux", "-L", "tp", "-f", str(CFG / "tmux.conf")]
+SOCKET = os.environ.get("RAIDPOINT_SOCKET", "tp")   # nome do socket do tmux (servidor próprio, separado do seu tmux)
+TMUX = ["tmux", "-L", SOCKET, "-f", str(CFG / "tmux.conf")]
 
 # ---------------------------------------------------------------- projetos
+PROJ = CFG / "projects.json"
+
+CONFIG_DEFAULT = {
+    "terminal": {"font": "Noto Sans Mono 11", "zoom_step": 0.1, "theme": "Catppuccin Mocha"},
+    # formato GTK: "<Control>d", "<Control><Shift>p"…  ("" desativa)
+    "keys": {
+        "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
+        "agents_panel": "<Control>j", "sidebar": "<Control>b",
+        "zoom_in": "<Control>plus", "zoom_out": "<Control>minus", "zoom_reset": "<Control>0",
+        "copy": "<Control><Shift>c", "paste": "<Control><Shift>v",
+    },
+}
+
+THEMES = {   # fundo, texto, 16 cores
+    "Catppuccin Mocha": ("#1e1e2e", "#cdd6f4", "#45475a #f38ba8 #a6e3a1 #f9e2af #89b4fa #f5c2e7 #94e2d5 #bac2de "
+                                                "#585b70 #f38ba8 #a6e3a1 #f9e2af #89b4fa #f5c2e7 #94e2d5 #a6adc8"),
+    "Tokyo Night": ("#1a1b26", "#c0caf5", "#15161e #f7768e #9ece6a #e0af68 #7aa2f7 #bb9af7 #7dcfff #a9b1d6 "
+                                          "#414868 #f7768e #9ece6a #e0af68 #7aa2f7 #bb9af7 #7dcfff #c0caf5"),
+    "Gruvbox Dark": ("#282828", "#ebdbb2", "#282828 #cc241d #98971a #d79921 #458588 #b16286 #689d6a #a89984 "
+                                           "#928374 #fb4934 #b8bb26 #fabd2f #83a598 #d3869b #8ec07c #ebdbb2"),
+    "Nord": ("#2e3440", "#d8dee9", "#3b4252 #bf616a #a3be8c #ebcb8b #81a1c1 #b48ead #88c0d0 #e5e9f0 "
+                                   "#4c566a #bf616a #a3be8c #ebcb8b #81a1c1 #b48ead #8fbcbb #eceff4"),
+}
+
+def _toml_val(v):
+    if isinstance(v, bool): return "true" if v else "false"
+    if isinstance(v, (int, float)): return repr(v)
+    return json.dumps(str(v), ensure_ascii=False)
+
+def save_config(cfg):
+    """grava ~/.raid_point/config.toml (atômico)"""
+    lines = ["# /dev/raid — configuração. Pode editar à mão, mas o painel de Configurações (Ctrl+,) faz isso por você.", ""]
+    for sec, vals in cfg.items():
+        if not isinstance(vals, dict): continue
+        lines.append(f"[{sec}]")
+        lines += [f"{k} = {_toml_val(v)}" for k, v in vals.items()]
+        lines.append("")
+    f = HOME / "config.toml"; tmp = Path(str(f) + ".tmp")
+    HOME.mkdir(parents=True, exist_ok=True)
+    tmp.write_text("\n".join(lines)); os.replace(tmp, f)
+
+def load_config():
+    """config.toml mesclado com os padrões; cria o arquivo na primeira vez."""
+    import copy, tomllib
+    base = copy.deepcopy(CONFIG_DEFAULT)
+    f = HOME / "config.toml"
+    if not f.exists():
+        try: save_config(base)
+        except OSError: pass
+        return base
+    try: user = tomllib.loads(f.read_text())
+    except Exception as e:
+        print("aviso: config.toml inválido, usando padrões:", e, file=__import__("sys").stderr); user = {}
+    for sec, vals in user.items():
+        if isinstance(vals, dict): base.setdefault(sec, {}).update(vals)
+    return base
+
+def save_agents(lst):
+    clean = [{"name": a["name"].strip(), "cmd": a.get("cmd", "").strip()} for a in lst if a.get("name", "").strip()]
+    write_json_atomic(CFG / "agents.json", clean or [{"name": "Shell", "cmd": ""}])
+
+
+def read_projects():
+    """conteúdo bruto do projects.json (inclui metadados como _last); {} se faltar ou estiver ilegível (leitores)"""
+    try: return json.loads(PROJ.read_text())
+    except Exception: return {}
+
 def load_projects():
-    try:
-        d = json.loads((CFG / "projects.json").read_text())
-    except Exception:
-        return {}
-    return {k: v for k, v in d.items() if isinstance(v, dict)}
+    return {k: v for k, v in read_projects().items() if isinstance(v, dict)}
+
+def update_projects(fn):
+    """lê-modifica-grava o projects.json com trava e escrita atômica. Se o arquivo existir mas estiver
+    ilegível, NÃO grava (evita apagar a lista inteira por causa de uma leitura ruim)."""
+    with open(CFG / "projects.lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try: d = json.loads(PROJ.read_text())
+        except FileNotFoundError: d = {}
+        r = fn(d)
+        tmp = PROJ.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=2, ensure_ascii=False))
+        os.replace(tmp, PROJ)
+        return r if r is not None else d
+
+def safe_name(s):
+    """nome de projeto seguro: sem barras/caracteres estranhos e sem começar com '_' (reservado a metadados)"""
+    return re.sub(r"[^\w .-]", "-", s or "").strip(" ._-") or "projeto"
+
+def unique_name(base, taken_dir=None):
+    """nome que não colide com outro projeto de outra pasta"""
+    db = load_projects(); n, i = base, 2
+    while n in db and (taken_dir is None or os.path.realpath(os.path.expanduser(db[n].get("dir", ""))) != os.path.realpath(taken_dir) or db[n].get("host")):
+        n = f"{base}-{i}"; i += 1
+    return n
+
+def write_json_atomic(path, obj):
+    tmp = Path(str(path) + ".tmp"); tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False)); os.replace(tmp, path)
 
 def agents_cfg():
     try:
@@ -40,8 +130,9 @@ def project_for_cwd(cwd):
         if p.get("host"):
             continue
         d = os.path.realpath(os.path.expanduser(p.get("dir", "")))
-        if d and (cwd == d or cwd.startswith(d + os.sep)) and len(d) > blen:
-            best, blen = n, len(d)
+        for base in ((d, d + "-wt") if d else ()):             # <dir>-wt = worktrees dos agentes
+            if (cwd == base or cwd.startswith(base + os.sep)) and len(d) > blen:
+                best, blen = n, len(d)
     return best
 
 def pdir(name):
@@ -49,11 +140,55 @@ def pdir(name):
     return p.get("dir") if p.get("host") else os.path.expanduser(p.get("dir", "~"))
 
 # ---------------------------------------------------------------- tmux
+def sess(name):
+    """nome da sessão tmux do projeto ('.' e ':' não podem ser endereçados pelo tmux)"""
+    return re.sub(r"[.:]", "_", name)
+
+def tgt(name):
+    """alvo EXATO de janela/painel da sessão do projeto (sem '=' o tmux casa por prefixo: 'api' acharia 'api2')"""
+    return f"={sess(name)}:"
+
+def sess_t(name):
+    """alvo exato de sessão (kill-session, has-session, attach...)"""
+    return f"={sess(name)}"
+
+def _q(args):
+    """junta args para o shell remoto SEMPRE entre aspas (um '=nome' sem aspas viraria expansão no zsh)"""
+    return " ".join("'" + str(x).replace("'", "'\\''") + "'" for x in args)
+
+def tmux_local(*a, timeout=15):
+    try: return subprocess.run(TMUX + list(a), text=True, capture_output=True, timeout=timeout)
+    except Exception as e: return subprocess.CompletedProcess(TMUX + list(a), 1, "", str(e))
+
+def alive():
+    r = tmux_local("list-sessions", "-F", "#{session_name}")
+    return set(r.stdout.split("\n")) - {""} if r.returncode == 0 else set()
+
+def ssh_hosts():
+    hs = []
+    try:
+        for l in open(os.path.expanduser("~/.ssh/config")):
+            m = re.match(r"\s*Host\s+(.+)", l, re.I)
+            if m:
+                hs += [h for h in m.group(1).split() if not re.search(r"[*?!]", h) and h != "github.com"]
+    except Exception: pass
+    return sorted(set(hs))
+
+def remote_argv(name, p):
+    """comando que conecta (mosh/ssh) à sessão tmux do projeto remoto"""
+    tm = ["tmux", "new-session", "-A", "-s", sess(name)] + (["-c", p["dir"]] if p.get("dir") else []) + \
+         [";", "set", "-g", "mouse", "on", ";", "set", "-g", "allow-set-title", "off",
+          ";", "set", "-g", "pane-border-status", "top",
+          ";", "set", "-g", "pane-border-format", " #{pane_title} "]
+    if p.get("transport", "mosh") == "mosh" and shutil.which("mosh"):
+        return ["mosh", p["host"], "--"] + tm
+    return ["ssh", "-t", p["host"], _q(tm)]
+
 def run_tmux(project, *a, timeout=15):
     p = load_projects().get(project, {})
     if p.get("host"):
         cmd = ["ssh", "-o", "ControlMaster=auto", "-o", f"ControlPath={CM}/cm-%C", "-o", "ControlPersist=120",
-               "-o", "BatchMode=yes", p["host"], shlex.join(["tmux", *a])]
+               "-o", "BatchMode=yes", p["host"], _q(["tmux", *a])]
     else:
         cmd = TMUX + list(a)
     try:
@@ -64,7 +199,7 @@ def run_tmux(project, *a, timeout=15):
 PANE_FMT = "#{pane_id}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}\t#{pane_active}\t#{pane_pid}\t#{t:window_activity}\t#{window_activity}"
 
 def list_panes(project):
-    r = run_tmux(project, "list-panes", "-s", "-t", project, "-F", PANE_FMT)
+    r = run_tmux(project, "list-panes", "-s", "-t", tgt(project), "-F", PANE_FMT)
     out = []
     now = time.time()
     for l in r.stdout.splitlines():
@@ -89,43 +224,62 @@ def git_root(path):
     return r.stdout.strip() if r.returncode == 0 else None
 
 def make_worktree(project, name):
-    """cria um git worktree isolado para um agente; devolve o caminho (ou None)"""
-    d = pdir(project)
-    root = git_root(d) if d and not load_projects()[project].get("host") else None
-    if not root: return None
+    """cria um git worktree isolado para um agente; devolve (caminho, erro)"""
+    p = load_projects().get(project, {})
+    if p.get("host"): return None, "worktree isolado não funciona em projeto remoto"
+    root = git_root(pdir(project) or "")
+    if not root: return None, "o projeto não é um repositório git"
+    if subprocess.run(["git", "-C", root, "rev-parse", "--verify", "-q", "HEAD"], capture_output=True).returncode != 0:
+        return None, "o repositório ainda não tem nenhum commit (o worktree precisa de um)"
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "agente"
     base = Path(root).parent / f"{Path(root).name}-wt"
     base.mkdir(exist_ok=True)
-    for i in range(1, 100):
+    for i in range(1, 200):
         path, br = base / f"{slug}-{i}", f"agent/{slug}-{i}"
-        if not path.exists():
-            r = subprocess.run(["git", "-C", root, "worktree", "add", "-b", br, str(path)], text=True, capture_output=True)
-            return str(path) if r.returncode == 0 else None
-    return None
+        if path.exists() or subprocess.run(["git", "-C", root, "show-ref", "--verify", "-q", f"refs/heads/{br}"],
+                                           capture_output=True).returncode == 0:
+            continue                                             # caminho ou branch já usados: tenta o próximo número
+        r = subprocess.run(["git", "-C", root, "worktree", "add", "-b", br, str(path)], text=True, capture_output=True)
+        return (str(path), None) if r.returncode == 0 else (None, (r.stderr or r.stdout).strip()[-300:])
+    return None, "worktrees demais (limite 200 por agente)"
 
 def spawn_pane(project, title, cmd="", worktree=False, layout="tiled", cwd=None):
+    """abre um painel; devolve (pane_id, pasta, erro). Se pediu worktree e ele falhar, NÃO abre (nada de rodar sem isolamento)"""
     d = cwd or pdir(project)
     if worktree and not cwd:
-        d = make_worktree(project, title) or d
-    a = ["split-window", "-t", project, "-P", "-F", "#{pane_id}"] + (["-c", d] if d else [])
+        d, err = make_worktree(project, title)
+        if err: return None, None, f"worktree: {err}"
+    a = ["split-window", "-t", tgt(project), "-P", "-F", "#{pane_id}"] + (["-c", d] if d else [])
     if cmd: a.append(cmd)
-    pid = run_tmux(project, *a).stdout.strip()
-    if pid:
-        run_tmux(project, "select-pane", "-t", pid, "-T", title)
-        run_tmux(project, "select-layout", "-t", project, layout)
-    return pid, d
+    r = run_tmux(project, *a)
+    pid = r.stdout.strip()
+    if not pid: return None, d, (r.stderr or "tmux não criou o painel").strip()[-200:]
+    run_tmux(project, "select-pane", "-t", pid, "-T", title)
+    run_tmux(project, "select-layout", "-t", tgt(project), layout)
+    return pid, d, None
 
 # ---------------------------------------------------------------- eventos
 def log_event(ev):
     ev.setdefault("ts", time.time())
     with open(EVENTS, "a") as f:
         f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    try:                                                         # rotação: o arquivo não cresce para sempre
+        if EVENTS.stat().st_size > 3_000_000:
+            data = EVENTS.read_bytes()[-1_000_000:]
+            tmp = EVENTS.with_suffix(".tmp"); tmp.write_bytes(data[data.find(b"\n") + 1:]); os.replace(tmp, EVENTS)
+    except OSError:
+        pass
 
 def read_events(max_age=6 * 3600, limit=4000):
-    try: lines = EVENTS.read_text().splitlines()[-limit:]
-    except FileNotFoundError: return []
+    try:
+        with open(EVENTS, "rb") as f:
+            f.seek(0, 2); size = f.tell(); f.seek(max(0, size - 1_000_000)); data = f.read()
+    except FileNotFoundError:
+        return []
+    lines = data.decode("utf-8", "ignore").splitlines()
+    if size > 1_000_000: lines = lines[1:]                       # a primeira linha pode ter sido cortada
     now = time.time(); out = []
-    for l in lines:
+    for l in lines[-limit:]:
         try: e = json.loads(l)
         except Exception: continue
         if now - e.get("ts", 0) <= max_age: out.append(e)
@@ -164,8 +318,14 @@ def _mdb():
 def mem_add(project, text, kind="note", tags=""):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower())[:40].strip("-") or "nota"
-    d = MEMDIR / project; d.mkdir(parents=True, exist_ok=True)
+    if project != safe_name(project) and project not in load_projects():
+        raise ValueError("projeto inválido")
+    d = MEMDIR / safe_name(project); d.mkdir(parents=True, exist_ok=True)
+    kind, tags = re.sub(r"\s+", " ", kind or "note")[:30], re.sub(r"\s+", " ", tags or "")[:100]
     path = d / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.md"
+    i = 1
+    while path.exists():                                         # duas notas no mesmo segundo não se sobrescrevem
+        i += 1; path = d / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}-{i}.md"
     path.write_text(f"---\nkind: {kind}\ntags: {tags}\nts: {ts}\n---\n\n{text}\n")
     with _mdb() as db:
         db.execute("insert into mem(project,kind,tags,text,path,ts) values (?,?,?,?,?,?)",
@@ -222,7 +382,7 @@ def redact(text, values):
     return text
 
 def ask_approval(kind, project, detail, timeout=120):
-    """pede aprovação humana ao app Raid Point (diálogo). Sem app rodando = negado."""
+    """pede aprovação humana ao app /dev/raid (diálogo). Sem app rodando = negado."""
     rid = uuid.uuid4().hex[:10]
     f = REQDIR / f"{rid}.json"
     f.write_text(json.dumps({"id": rid, "kind": kind, "project": project, "detail": detail,
@@ -239,10 +399,12 @@ def ask_approval(kind, project, detail, timeout=120):
 
 def run_with_secrets(project, command, names, purpose=""):
     """roda um comando com segredos injetados em variáveis de ambiente; saída com segredos mascarados"""
+    if load_projects().get(project, {}).get("host"):
+        return {"error": "run_with_secrets só funciona em projetos locais"}
     have = secret_names(project)
     missing = [n for n in names if n not in have]
     if missing: return {"error": f"segredos inexistentes: {missing}"}
-    detail = f"Comando: {command}\nSegredos: {', '.join(names)}\nMotivo: {purpose or '(não informado)'}"
+    detail = f"Comando: {command[:1500]}{'…' if len(command) > 1500 else ''}\nSegredos: {', '.join(names)}\nMotivo: {purpose or '(não informado)'}"
     if not ask_approval("secret", project, detail):
         return {"error": "negado pelo usuário (ou sem resposta em 120s)"}
     env = dict(os.environ); vals = []
@@ -284,8 +446,15 @@ def gh_repos(force=False, ttl=300):
     cache.write_text(json.dumps(repos))
     return repos
 
+NWO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+def check_nwo(nwo):
+    if not NWO_RE.match(nwo or "") or any(part in (".", "..") for part in nwo.split("/")):
+        raise ValueError(f"repositório inválido: {nwo!r} (use dono/repo)")
+
 def workspace_path(nwo):
     """~/.raid_point/workspaces/<repo> (se já existe outro repo com esse nome: <dono>-<repo>)"""
+    check_nwo(nwo)
     owner, name = nwo.split("/", 1)
     p = WS / name
     if p.exists():
@@ -297,5 +466,202 @@ def ensure_workspace(nwo):
     """clona o repo no workspace se ainda não existir; devolve (caminho, erro)"""
     p = workspace_path(nwo)
     if (p / ".git").exists(): return str(p), None
-    r = subprocess.run(["gh", "repo", "clone", nwo, str(p)], text=True, capture_output=True)
+    try: r = subprocess.run(["gh", "repo", "clone", nwo, str(p)], text=True, capture_output=True, timeout=900)
+    except subprocess.TimeoutExpired: return None, "o clone passou de 15 minutos e foi cancelado"
     return (str(p), None) if r.returncode == 0 else (None, (r.stderr or r.stdout).strip()[-400:])
+
+
+# ---------------------------------------------------------------- uso de tokens (Claude Code, via transcripts)
+CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+USAGE_STATE = CM / "usage.json"
+BUCKET = 300  # segundos
+
+def usage_update(max_age_days=8):
+    """lê (incrementalmente) os transcripts do Claude Code e acumula tokens por balde de 5 min/projeto/modelo.
+    Deduplica por message.id (uma resposta aparece em várias linhas do transcript)."""
+    from datetime import datetime
+    try: st = json.loads(USAGE_STATE.read_text())
+    except Exception: st = {}
+    files, seen, buckets = st.get("files", {}), st.get("seen", {}), st.get("buckets", {})
+    now = time.time(); cutoff = now - max_age_days * 86400
+    changed = False; proj_cache = {}
+    for path in CLAUDE_PROJECTS.rglob("*.jsonl"):
+        try: s = path.stat()
+        except OSError: continue
+        if s.st_mtime < cutoff: continue
+        off = files.get(str(path), 0)
+        if s.st_size < off: off = 0
+        if s.st_size == off: continue
+        with open(path, "rb") as fh:
+            fh.seek(off); data = fh.read()
+        end = data.rfind(b"\n") + 1
+        files[str(path)] = off + end; changed = True
+        for line in data[:end].split(b"\n"):
+            if b'"usage"' not in line: continue
+            try: o = json.loads(line)
+            except Exception: continue
+            m = o.get("message") or {}; u = m.get("usage")
+            if not u: continue
+            mid = m.get("id") or o.get("requestId") or o.get("uuid")
+            if mid in seen: continue
+            try: ts = datetime.fromisoformat(o["timestamp"].replace("Z", "+00:00")).timestamp()
+            except Exception: continue
+            if ts < cutoff: continue
+            seen[mid] = ts
+            cwd = o.get("cwd") or ""
+            if cwd not in proj_cache:
+                proj_cache[cwd] = project_for_cwd(cwd) or (os.path.basename(cwd.rstrip("/")) if cwd else "?")
+            proj = proj_cache[cwd]
+            key = f"{int(ts // BUCKET)}|{proj}|{m.get('model') or '?'}"
+            b = buckets.setdefault(key, [0, 0, 0, 0, 0])
+            b[0] += u.get("input_tokens", 0); b[1] += u.get("output_tokens", 0)
+            b[2] += u.get("cache_creation_input_tokens", 0); b[3] += u.get("cache_read_input_tokens", 0); b[4] += 1
+    seen = {k: v for k, v in seen.items() if v >= cutoff}
+    buckets = {k: v for k, v in buckets.items() if int(k.split("|")[0]) * BUCKET >= cutoff}
+    if changed:
+        write_json_atomic(USAGE_STATE, {"files": files, "seen": seen, "buckets": buckets})
+    return buckets
+
+def usage_summary(buckets=None):
+    """totais por janela (5h, 24h, 7d), por projeto e por modelo. 'novos' = entrada + saída + criação de cache."""
+    buckets = buckets if buckets is not None else usage_update()
+    now = time.time()
+    wins = {"5h": 5 * 3600, "24h": 24 * 3600, "7d": 7 * 86400}
+    out = {w: {"inp": 0, "out": 0, "cache_create": 0, "cache_read": 0, "msgs": 0, "by_project": {}, "by_model": {}} for w in wins}
+    for key, v in buckets.items():
+        t, proj, model = key.split("|", 2); t = int(t) * BUCKET
+        for w, secs in wins.items():
+            if now - t <= secs:
+                o = out[w]
+                o["inp"] += v[0]; o["out"] += v[1]; o["cache_create"] += v[2]; o["cache_read"] += v[3]; o["msgs"] += v[4]
+                new = v[0] + v[1] + v[2]
+                o["by_project"][proj] = o["by_project"].get(proj, 0) + new
+                o["by_model"][model] = o["by_model"].get(model, 0) + new
+    for o in out.values():
+        o["new"] = o["inp"] + o["out"] + o["cache_create"]
+    return out
+
+def fmt_tokens(n):
+    return f"{n/1e6:.1f}M" if n >= 1e6 else (f"{n/1e3:.0f}k" if n >= 1e3 else str(n))
+
+
+# ---------------------------------------------------------------- limites do plano (vêm do statusLine do Claude Code)
+PLAN_FILE = DATA / "plan.json"
+
+def plan_status():
+    """últimos percentuais de 5h/7d gravados pelo `raidpoint statusline`; janelas vencidas são descartadas"""
+    try: d = json.loads(PLAN_FILE.read_text())
+    except Exception: return None
+    now = time.time()
+    for k in ("five_hour", "seven_day"):
+        w = d.get(k)
+        if w and w.get("resets_at") and w["resets_at"] < now: d[k] = None
+    d["age_s"] = now - d.get("ts", 0)
+    return d
+
+
+# ---------------------------------------------------------------- git: últimos commits e CI (GitHub Actions)
+_GD = {}
+
+def ci_state(runs):
+    if not runs: return "none"
+    r = runs[0]
+    if r["status"] != "completed": return "running"
+    return {"success": "ok", "failure": "fail", "timed_out": "fail", "startup_failure": "fail"}.get(r["conclusion"], "other")
+
+def git_detail(d, ncommits=6, nruns=6):
+    """branch, últimos commits e últimas execuções do GitHub Actions da branch atual"""
+    from datetime import datetime
+    r = subprocess.run(["git", "-C", d, "symbolic-ref", "--short", "HEAD"], text=True, capture_output=True)
+    if r.returncode != 0:
+        r = subprocess.run(["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"], text=True, capture_output=True)
+    if r.returncode != 0: return None
+    out = {"branch": r.stdout.strip(), "commits": [], "runs": [], "ci": "none"}
+    r = subprocess.run(["git", "-C", d, "log", "-n", str(ncommits), "--pretty=format:%h%x09%s%x09%an%x09%ct"],
+                       text=True, capture_output=True)
+    for l in r.stdout.splitlines():
+        f = l.split("\t")
+        if len(f) == 4: out["commits"].append({"sha": f[0], "msg": f[1], "author": f[2], "ts": int(f[3])})
+    if shutil.which("gh") and out["branch"] != "HEAD":
+        try:
+            g = subprocess.run(["gh", "run", "list", "--branch", out["branch"], "--limit", str(nruns), "--json",
+                                "databaseId,name,displayTitle,status,conclusion,event,createdAt,url"],
+                               cwd=d, text=True, capture_output=True, timeout=15)
+            for x in (json.loads(g.stdout or "[]") if g.returncode == 0 else []):
+                try: ts = datetime.fromisoformat(x["createdAt"].replace("Z", "+00:00")).timestamp()
+                except Exception: ts = 0
+                out["runs"].append({"id": x["databaseId"], "name": x["name"], "title": x["displayTitle"],
+                                    "status": x["status"], "conclusion": x.get("conclusion"),
+                                    "event": x["event"], "ts": ts, "url": x["url"]})
+        except Exception:
+            pass
+    out["ci"] = ci_state(out["runs"])
+    return out
+
+def _git(d, *a, timeout=30):
+    return subprocess.run(["git", "-C", d, *a], text=True, capture_output=True, timeout=timeout)
+
+def git_targets(d):
+    """pastas git do projeto: a principal + worktrees dos agentes -> [(rótulo, caminho)]"""
+    r = _git(d, "worktree", "list", "--porcelain")
+    if r.returncode != 0: return []
+    paths = [l[9:] for l in r.stdout.splitlines() if l.startswith("worktree ")]
+    out = []
+    for i, p in enumerate(paths):
+        out.append(("principal" if i == 0 else os.path.basename(p), p))
+    return out
+
+def git_changes(d):
+    """arquivos alterados -> [(status, caminho)]; status: M modificado, A novo(staged), D apagado, ? novo, R renomeado"""
+    r = _git(d, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    if r.returncode != 0: return None
+    out, parts, i = [], r.stdout.split("\0"), 0
+    while i < len(parts):
+        e = parts[i]; i += 1
+        if len(e) < 4: continue
+        xy, path = e[:2], e[3:]
+        if "R" in xy or "C" in xy: i += 1          # próximo campo é o caminho de origem
+        st = "?" if xy == "??" else ("D" if "D" in xy else ("A" if "A" in xy else ("R" if "R" in xy else "M")))
+        out.append((st, path))
+    return out
+
+def git_diff(d, path, status):
+    """diff de um arquivo (inclui o que já está staged); novos: mostra o conteúdo todo como adição"""
+    if status == "?":
+        r = _git(d, "diff", "--no-index", "--", os.devnull, path)    # sai com 1 quando há diferença
+    else:
+        r = _git(d, "diff", "HEAD", "--", path)
+        if r.returncode != 0 or not r.stdout:                         # repo sem commits
+            r = _git(d, "diff", "--cached", "--", path)
+    txt = r.stdout
+    return txt if len(txt) < 400_000 else txt[:400_000] + "\n… (diff truncado)"
+
+def git_revert(d, path, status):
+    """descarta as mudanças de UM arquivo; devolve mensagem de erro ou None"""
+    if status == "?":
+        f = Path(d, path)
+        try: f.unlink()
+        except OSError as e: return str(e)
+        return None
+    r = _git(d, "restore", "--source=HEAD", "--staged", "--worktree", "--", path)
+    return None if r.returncode == 0 else (r.stderr.strip() or "falhou")
+
+def git_commit(d, msg, paths=None):
+    """commita os arquivos escolhidos (ou tudo); devolve (ok, saída)"""
+    if not msg.strip(): return False, "mensagem vazia"
+    r = _git(d, "add", "-A", "--", *(paths or ["."]))
+    if r.returncode != 0: return False, r.stderr.strip()
+    r = _git(d, "commit", "-m", msg, "--", *(paths or []) ) if paths else _git(d, "commit", "-m", msg)
+    return r.returncode == 0, (r.stdout + r.stderr).strip()
+
+def git_detail_cached(d, ttl=60):
+    ts, v = _GD.get(d, (0, None))
+    if time.time() - ts > ttl:
+        try: v = git_detail(d)
+        except Exception: pass
+        _GD[d] = (time.time(), v)
+    return v
+
+def ago(ts):
+    s = max(0, int(time.time() - ts))
+    return f"{s}s" if s < 60 else (f"{s // 60}min" if s < 3600 else (f"{s // 3600}h" if s < 86400 else f"{s // 86400}d"))

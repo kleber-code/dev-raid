@@ -34,14 +34,29 @@ raid-point            # abre o app
 
 Dependências no Arch: `sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring mosh noto-fonts`
 
-## Atalhos (dentro dos terminais: prefixo `Ctrl+a`)
+## Atalhos
 
-| Ação | Tecla |
+Teclado e mouse (o prefixo do tmux é `Ctrl+a`):
+
+| Ação | Tecla / gesto |
 |---|---|
+| Copiar / colar | `Ctrl+Shift+C` / `Ctrl+Shift+V` (ou `Ctrl+Insert` / `Shift+Insert`) |
+| Copiar dentro do tmux | arrastar com o mouse (vai sozinho para a área de transferência) |
+| Abrir link | `Ctrl+clique` |
+| Menu do botão direito | copiar, colar, abrir link, dividir, zoom, mover para nova aba, fechar painel |
 | Ocultar/mostrar projetos | `Ctrl+B` |
 | Painel de agentes | `Ctrl+J` |
-| Dividir / nova aba / fechar painel / zoom | `Alt+\` , `Alt+-` / `Alt+t` / `Alt+w` / `Alt+z` |
+| **Ações** (paleta: agentes, painéis, layout, texto, config…) | `Ctrl+D` |
+| **Configurações** (visual: fonte, tema, atalhos, agentes) | `Ctrl+,` |
+| Ir para a aba N / trocar painel de lugar | `Alt+1…9` / `Alt+Shift+setas` |
+| Mudanças / diff / commit | `Ctrl+G` |
+| Zoom do texto | `Ctrl +` / `Ctrl −` / `Ctrl 0` / `Ctrl`+roda (configurável em `~/.raid_point/config.toml`) |
+| Dividir lado a lado / embaixo | `Alt+\` / `Alt+-` |
+| Nova aba / próxima / anterior | `Alt+t` / `Ctrl+PageDown` / `Ctrl+PageUp` |
+| Fechar painel (pergunta antes) / zoom | `Alt+w` / `Alt+z` |
 | Navegar entre painéis | `Alt+setas` |
+
+O botão direito é do Raid Point (e não do tmux ou do programa dentro do terminal), por isso funciona em qualquer painel.
 
 ## Sway
 
@@ -56,7 +71,21 @@ for_window [app_id="dev.raidpoint.App"] move to workspace 2
 Tudo em `~/.raid_point/`: `projects.json`, `agents.json` (presets do menu ＋ Agente), `tmux.conf`,
 `workspaces/`, `data/` (eventos e memória).
 
-## Segurança
+## Segurança e limites (leia)
 
-`send_message`/`spawn_agent` em **shell puro** exigem aprovação humana; segredos nunca são retornados
-a agentes. Alerta de vazamento de segredo em logs: ainda não implementado.
+- `send_message` só entra direto em painéis de **agente** (aberto pelo Raid Point, com o nome de um preset que
+  não seja Shell). Qualquer outro painel (shell, ssh, python…) pede a sua aprovação.
+- Os segredos ficam no chaveiro do sistema; as ferramentas MCP **nunca devolvem o valor** ao agente, e o
+  `run_with_secrets` só roda depois da sua aprovação, com a saída mascarada (só mascara o valor exato, não
+  versões codificadas dele).
+- **Isso protege contra o uso pelas ferramentas MCP, não contra um agente com acesso a shell.** Um agente que roda
+  comandos como o seu usuário consegue, em tese, ler o chaveiro direto (`secret-tool`) ou editar os arquivos de
+  aprovação. Para uma barreira de verdade, rode os agentes sob outro usuário ou em sandbox.
+- A memória do projeto entra no contexto de novas sessões: trate o que os agentes gravam nela como não confiável.
+- Alerta de vazamento de segredo em logs: ainda não implementado.
+
+## Desenvolvimento
+
+- `RAIDPOINT_HOME` muda a pasta de dados e `RAIDPOINT_SOCKET` o socket do tmux, para testar sem tocar no uso real.
+- Os nomes de sessão do tmux trocam `.` e `:` por `_` e os alvos usam `=nome:` (casamento exato, não por prefixo).
+- `projects.json` é gravado com trava e de forma atômica; se estiver ilegível, o app se recusa a sobrescrevê-lo.
