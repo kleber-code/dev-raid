@@ -12,7 +12,7 @@ optdepends=('mosh: remote projects over mosh'
             'noto-fonts: default terminal font')
 makedepends=('make')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')   # troque pelo hash real depois de criar a tag v0.2.0:  updpkgsums
+sha256sums=('2d69bf184f5d1099129446c29b792b837148e642e00f2c592ea1345278c38631')
 
 package() {
   cd "dev-raid-$pkgver"
