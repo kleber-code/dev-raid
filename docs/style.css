@@ -16,7 +16,7 @@ pre code { background: none; border: 0; padding: 0; color: var(--txt); font-size
 kbd { background: var(--bg3); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 1px 7px; font-size: .84em; color: var(--txt); white-space: nowrap; }
 .shell { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
-/* topo */
+/* header */
 .top { position: sticky; top: 0; z-index: 10; background: rgba(17,17,27,.86); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 .top .shell { display: flex; align-items: center; gap: 22px; height: 56px; }
 .brand { font: 700 1.1rem var(--mono); color: var(--txt); letter-spacing: -.5px; }
@@ -45,7 +45,7 @@ kbd { background: var(--bg3); border: 1px solid var(--line); border-bottom-width
 .shot img { display: block; width: 100%; height: auto; }
 .install { max-width: 620px; margin: 30px auto 0; text-align: left; }
 
-/* seções */
+/* sections */
 section.s { padding: 72px 0; }
 section.s.alt { background: var(--bg2); border-block: 1px solid var(--line); }
 h2 { font: 700 clamp(1.6rem, 4vw, 2.2rem)/1.2 var(--mono); letter-spacing: -1px; margin: 0 0 10px; }
@@ -64,7 +64,7 @@ section.alt .card { background: var(--bg3); }
 @media (max-width: 860px) { .two { grid-template-columns: 1fr; } .top nav a:not(.gh) { display: none; } }
 footer { border-top: 1px solid var(--line); padding: 36px 0 56px; color: var(--mut); font-size: .9rem; text-align: center; }
 
-/* guia */
+/* guide */
 .doc { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 48px; padding-top: 36px; padding-bottom: 80px; }
 .toc { position: sticky; top: 76px; align-self: start; max-height: calc(100vh - 96px); overflow: auto; font-size: .9rem; padding-right: 8px; }
 .toc h4 { margin: 18px 0 6px; font: 700 .72rem var(--mono); letter-spacing: 1.5px; color: var(--mut); text-transform: uppercase; }

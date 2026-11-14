@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>/dev/raid — orquestre agentes de IA em terminais, por projeto</title>
-<meta name="description" content="/dev/raid é um app de desktop (GTK4 + VTE + tmux) para rodar vários agentes de IA — Claude Code, Codex, Aider — em paralelo, um conjunto de terminais por projeto, que sobrevive quando você fecha a janela.">
+<title>/dev/raid — orchestrate AI coding agents in terminals, per project</title>
+<meta name="description" content="/dev/raid is a desktop app (GTK4 + VTE + tmux) for running several AI coding agents — Claude Code, Codex, Aider — in parallel, one set of terminals per project, that keeps running when you close the window.">
 <meta property="og:title" content="/dev/raid">
-<meta property="og:description" content="Orquestre vários agentes de IA em terminais persistentes, um conjunto por projeto. Código aberto, para Linux.">
+<meta property="og:description" content="Orchestrate many AI coding agents in persistent terminals, one workspace per project. Open source, for Linux.">
 <meta property="og:image" content="https://kleber-code.github.io/dev-raid/img/og.png">
 <meta name="theme-color" content="#11111b">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -17,78 +17,79 @@
 <header class="top"><div class="shell">
   <a class="brand" href="./"><img src="logo.svg" alt="" width="26" height="26">/dev/<b>raid</b></a>
   <nav>
-    <a href="#recursos">Recursos</a>
-    <a href="#instalar">Instalar</a>
-    <a href="guia.html">Guia</a>
-    <a href="guia.html#atalhos">Atalhos</a>
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="guide.html">Guide</a>
+    <a href="guide.html#shortcuts">Shortcuts</a>
     <a class="gh" href="https://github.com/kleber-code/dev-raid">GitHub</a>
   </nav>
 </div></header>
 
 <main>
 <section class="hero"><div class="shell">
-  <img class="logo" src="logo.svg" alt="Logo do /dev/raid" width="104" height="104">
-  <span class="pill">código aberto · MIT · Linux (GTK4)</span>
+  <img class="logo" src="logo.svg" alt="/dev/raid logo" width="104" height="104">
+  <span class="pill">open source · MIT · Linux (GTK4)</span>
   <h1>/dev/<b>raid</b></h1>
-  <p class="lede">Um “VS Code de terminais” para <strong>orquestrar vários agentes de IA</strong> em paralelo.
-    Um conjunto de terminais por projeto, que <strong>continua vivo</strong> quando você fecha a janela.</p>
+  <p class="lede">A “VS Code for terminals” to <strong>orchestrate many AI coding agents</strong> in parallel.
+    One set of terminals per project, that <strong>stays alive</strong> when you close the window.</p>
   <div class="cta">
-    <a class="btn p" href="#instalar">Instalar em uma linha</a>
-    <a class="btn" href="guia.html">Ler o guia</a>
-    <a class="btn" href="https://github.com/kleber-code/dev-raid">Ver no GitHub</a>
+    <a class="btn p" href="#install">Install in one line</a>
+    <a class="btn" href="guide.html">Read the guide</a>
+    <a class="btn" href="https://github.com/kleber-code/dev-raid">View on GitHub</a>
   </div>
-  <div class="shot"><img src="img/main.webp" width="1400" height="780" alt="/dev/raid com quatro painéis — shell, Claude, Codex e outro shell — e o painel de agentes aberto à direita"></div>
+  <div class="shot"><img src="img/main.webp" width="1400" height="780" alt="/dev/raid with four panes — shell, Claude, Codex and another shell — and the agents panel open on the right"></div>
 </div></section>
 
-<section class="s" id="recursos"><div class="shell">
-  <h2>Feito para quem programa com agentes</h2>
-  <p class="sub">Rodar três agentes ao mesmo tempo vira bagunça de abas e janelas. O /dev/raid dá um lugar para cada projeto e deixa você ver, aprovar e controlar tudo por teclado.</p>
+<section class="s" id="features"><div class="shell">
+  <h2>Built for coding with agents</h2>
+  <p class="sub">Running three agents at once turns into a mess of tabs and windows. /dev/raid gives each project its own place and lets you watch, approve and control everything from the keyboard.</p>
   <div class="grid">
-    <div class="card"><h3><i>01</i>Terminais que sobrevivem</h3><p>Cada projeto é uma sessão tmux. Feche o app, volte horas depois: os agentes continuam rodando exatamente onde estavam.</p></div>
-    <div class="card"><h3><i>02</i>Vários agentes, sem conflito</h3><p>Abra Claude Code, Codex, Aider ou Ollama lado a lado. Cada um pode ganhar uma <strong>git worktree isolada</strong>, com branch própria, para não pisar no trabalho do outro.</p></div>
-    <div class="card"><h3><i>03</i>Revise o que o agente fez</h3><p>A janela de <strong>Mudanças</strong> mostra o diff colorido de cada arquivo, deixa reverter um arquivo e commitar — inclusive nas worktrees dos agentes.</p></div>
-    <div class="card"><h3><i>04</i>Tudo por teclado</h3><p><kbd>Ctrl</kbd>+<kbd>D</kbd> abre as ações: abrir agente, dividir painel, trocar layout, mudar tema. Atalhos de tiling WM (<kbd>Alt</kbd>+setas, <kbd>Alt</kbd>+1…9) e todos reconfiguráveis.</p></div>
-    <div class="card"><h3><i>05</i>Subagentes e status ao vivo</h3><p>O painel de agentes mostra quem está trabalhando, esperando ou terminou, incluindo subagentes do Claude Code (via hooks), commits recentes e o CI do GitHub.</p></div>
-    <div class="card"><h3><i>06</i>Memória e segredos por projeto</h3><p>Notas em markdown com busca que entram no contexto das novas sessões. Segredos ficam no chaveiro do sistema: o agente só vê os <em>nomes</em> e você aprova cada uso.</p></div>
-    <div class="card"><h3><i>07</i>Servidores remotos</h3><p>Projetos em VPS via <code>mosh</code> ou ssh, direto do seu <code>~/.ssh/config</code>. O tmux roda no servidor — a conexão cai, o trabalho não.</p></div>
-    <div class="card"><h3><i>08</i>Servidor MCP embutido</h3><p>Os próprios agentes podem listar projetos, abrir outros agentes, mandar mensagem, ler a saída de um painel e usar memória e segredos.</p></div>
-    <div class="card"><h3><i>09</i>Tarefa em paralelo</h3><p>Escreva a tarefa uma vez e dispare Claude, Codex ou várias cópias do mesmo, cada um na sua worktree. Depois compare os resultados lado a lado.</p></div>
-    <div class="card"><h3><i>10</i>Agente orquestrador</h3><p>Um Claude que divide o objetivo, abre subagentes em worktrees pelo MCP, acompanha o andamento e entrega as branches para você revisar. Sem merge sozinho.</p></div>
-    <div class="card"><h3><i>11</i>Créditos à vista</h3><p>Percentual do plano (5 h e semana) do <strong>Claude</strong> e do <strong>Codex</strong>, saldo de créditos e tokens por projeto — e o orquestrador usa isso para não estourar a cota.</p></div>
-    <div class="card"><h3><i>12</i>Seu visual</h3><p>Temas (Catppuccin, Tokyo Night, Gruvbox, Nord), cor de destaque, fonte, cursor e atalhos — tudo em um painel de Configurações, salvo na hora.</p></div>
-    <div class="card"><h3><i>13</i>GitHub sem fricção</h3><p>Lista todos os seus repositórios (usuário e orgs) usando o <code>gh</code> que você já tem. Abrir um repo clona e vira projeto.</p></div>
+    <div class="card"><h3><i>01</i>Terminals that survive</h3><p>Each project is a tmux session. Close the app, come back hours later: your agents are still running exactly where you left them.</p></div>
+    <div class="card"><h3><i>02</i>Many agents, no conflicts</h3><p>Open Claude Code, Codex, Aider or Ollama side by side. Each one can get an <strong>isolated git worktree</strong> on its own branch, so they don't step on each other's work.</p></div>
+    <div class="card"><h3><i>03</i>Review what the agent did</h3><p>The <strong>Changes</strong> window shows a colored diff of every file, lets you revert a single file and commit — agent worktrees included.</p></div>
+    <div class="card"><h3><i>04</i>Keyboard-driven</h3><p><kbd>Ctrl</kbd>+<kbd>D</kbd> opens the actions: open an agent, split a pane, switch layout, change theme. Tiling-WM shortcuts (<kbd>Alt</kbd>+arrows, <kbd>Alt</kbd>+1…9), all of them remappable.</p></div>
+    <div class="card"><h3><i>05</i>Subagents and live status</h3><p>The agents panel shows who is working, waiting or done — including Claude Code subagents (via hooks) — plus recent commits and GitHub CI.</p></div>
+    <div class="card"><h3><i>06</i>Per-project memory and secrets</h3><p>Searchable markdown notes that feed into new sessions' context. Secrets live in the system keyring: agents only see their <em>names</em>, and you approve every use.</p></div>
+    <div class="card"><h3><i>07</i>Remote servers</h3><p>Projects on a VPS via <code>mosh</code> or ssh, straight from your <code>~/.ssh/config</code>. tmux runs on the server — the connection drops, the work doesn't.</p></div>
+    <div class="card"><h3><i>08</i>Built-in MCP server</h3><p>Agents themselves can list projects, open other agents, send messages, read a pane's output and use memory and secrets.</p></div>
+    <div class="card"><h3><i>09</i>Parallel tasks</h3><p>Write the task once and send it to Claude, Codex or several copies of the same agent, each in its own worktree. Then compare the results side by side.</p></div>
+    <div class="card"><h3><i>10</i>Orchestrator agent</h3><p>A Claude that breaks down the goal, opens subagents in worktrees over MCP, tracks their progress and hands you the branches to review. It never merges on its own.</p></div>
+    <div class="card"><h3><i>11</i>Credits at a glance</h3><p>Plan usage (5-hour and weekly) for <strong>Claude</strong> and <strong>Codex</strong>, credit balance and tokens per project — and the orchestrator uses it to stay within your quota.</p></div>
+    <div class="card"><h3><i>12</i>Your look</h3><p>Themes (Catppuccin, Tokyo Night, Gruvbox, Nord), accent color, font, cursor and shortcuts — all in one Settings window, saved instantly.</p></div>
+    <div class="card"><h3><i>13</i>Frictionless GitHub</h3><p>Lists all your repositories (user and orgs) using the <code>gh</code> you already have. Opening a repo clones it and makes it a project.</p></div>
+    <div class="card"><h3><i>14</i>Always up to date</h3><p>Checks for new versions every few hours and updates itself — or leaves it to your package manager. Your terminals survive the restart. Run <code>devraid update</code> anytime.</p></div>
   </div>
 </div></section>
 
 <section class="s alt"><div class="shell">
   <div class="two">
     <div>
-      <h2>Ações em um atalho</h2>
-      <p>Aperte <kbd>Ctrl</kbd>+<kbd>D</kbd> e digite. Abrir um agente (com ou sem worktree), novo painel, aba, layout, zoom do texto, trocar de projeto, abrir configurações… Tudo em uma lista com busca, sem tirar a mão do teclado.</p>
-      <ul><li>Setas e <kbd>Enter</kbd> para escolher, <kbd>Esc</kbd> fecha</li><li>Busca que ignora acentos</li><li>O atalho é seu: mude em Configurações</li></ul>
+      <h2>Actions in one shortcut</h2>
+      <p>Press <kbd>Ctrl</kbd>+<kbd>D</kbd> and type. Open an agent (with or without a worktree), a new pane, tab, layout, text zoom, switch project, open settings… All in one searchable list, without leaving the keyboard.</p>
+      <ul><li>Arrows and <kbd>Enter</kbd> to pick, <kbd>Esc</kbd> to close</li><li>Accent-insensitive search</li><li>The shortcut is yours: change it in Settings</li></ul>
     </div>
-    <div class="shot"><img src="img/palette.webp" width="560" height="420" loading="lazy" alt="Paleta de ações filtrada por “agente”, listando Claude, Codex, Aider e Ollama, cada um também em worktree isolada"></div>
+    <div class="shot"><img src="img/palette.webp" width="560" height="420" loading="lazy" alt="Actions palette filtered by “agent”, listing Claude, Codex, Aider and Ollama, each also in an isolated worktree"></div>
   </div>
 </div></section>
 
 <section class="s"><div class="shell">
   <div class="two">
-    <div class="shot"><img src="img/changes.webp" width="1400" height="780" loading="lazy" alt="Janela de Mudanças com a lista de arquivos alterados e o diff colorido de src/api.py"></div>
+    <div class="shot"><img src="img/changes.webp" width="1400" height="780" loading="lazy" alt="Changes window with the list of modified files and the colored diff of src/api.py"></div>
     <div>
-      <h2>Veja e aprove o que mudou</h2>
-      <p>Depois que o agente trabalha, você quer ver o diff antes de aceitar. A janela de Mudanças (<kbd>Ctrl</kbd>+<kbd>G</kbd>) lista os arquivos alterados da pasta principal e de cada worktree de agente.</p>
-      <ul><li>Diff colorido por arquivo</li><li>Reverter só um arquivo (com confirmação)</li><li>Commit de tudo, com a sua mensagem</li></ul>
+      <h2>See and approve what changed</h2>
+      <p>After an agent works, you want to see the diff before accepting it. The Changes window (<kbd>Ctrl</kbd>+<kbd>G</kbd>) lists modified files in the main folder and in every agent worktree.</p>
+      <ul><li>Colored diff per file</li><li>Revert a single file (with confirmation)</li><li>Commit everything, with your message</li></ul>
     </div>
   </div>
 </div></section>
 
 <section class="s"><div class="shell">
   <div class="two">
-    <div class="shot"><img src="img/parallel.webp" width="720" height="560" loading="lazy" alt="Diálogo de tarefa em paralelo: uma tarefa, Claude e Codex marcados, worktree isolada"></div>
+    <div class="shot"><img src="img/parallel.webp" width="720" height="560" loading="lazy" alt="Parallel task dialog: one task, Claude and Codex selected, isolated worktree"></div>
     <div>
-      <h2>Uma tarefa, vários agentes</h2>
-      <p>Escreva uma vez, escolha quem trabalha e dispare. Cada agente recebe a tarefa já na própria worktree e branch; você acompanha tudo no painel de agentes e compara o resultado em Mudanças.</p>
-      <ul><li>Claude e Codex lado a lado, ou três Claudes para comparar abordagens</li><li>Ou deixe um <strong>orquestrador</strong> dividir o trabalho e abrir os subagentes</li><li>Você revisa; nada é mesclado sem a sua decisão</li></ul>
+      <h2>One task, many agents</h2>
+      <p>Write it once, choose who works on it and launch. Each agent gets the task in its own worktree and branch; you follow along in the agents panel and compare the results in Changes.</p>
+      <ul><li>Claude and Codex side by side, or three Claudes to compare approaches</li><li>Or let an <strong>orchestrator</strong> split the work and open the subagents</li><li>You review; nothing is merged without your say</li></ul>
     </div>
   </div>
 </div></section>
@@ -96,28 +97,28 @@
 <section class="s alt"><div class="shell">
   <div class="two">
     <div>
-      <h2>Configurações visuais</h2>
-      <p>Fonte, tamanho do texto, tema de cores, atalhos e a lista de agentes — tudo em um painel, salvo na hora. Nada de editar arquivo (embora o <code>config.toml</code> esteja lá, se você preferir).</p>
-      <ul><li>Quatro temas: Catppuccin, Tokyo Night, Gruvbox, Nord</li><li>Captura de atalho: clique e aperte a combinação</li><li>Adicione qualquer CLI como agente</li></ul>
+      <h2>Visual settings</h2>
+      <p>Font, text size, color theme, shortcuts and the agent list — all in one window, saved instantly. No config files to edit (though <code>config.toml</code> is there if you prefer).</p>
+      <ul><li>Four themes: Catppuccin, Tokyo Night, Gruvbox, Nord</li><li>Shortcut capture: click and press the combination</li><li>Add any CLI as an agent</li></ul>
     </div>
-    <div class="shot"><img src="img/settings.webp" width="900" height="600" loading="lazy" alt="Painel de configurações, página Terminal, com fonte, zoom e tema"></div>
+    <div class="shot"><img src="img/settings.webp" width="900" height="600" loading="lazy" alt="Settings window, Terminal page, with font, zoom and theme"></div>
   </div>
 </div></section>
 
-<section class="s" id="instalar"><div class="shell">
-  <h2>Instalar em uma linha</h2>
-  <p class="sub">Linux com GTK4 e VTE. O instalador detecta a distro (Arch, Fedora, Debian/Ubuntu), instala o que faltar (pergunta antes do <code>sudo</code>) e coloca o app em <code>~/.local</code>, sem root.</p>
+<section class="s" id="install"><div class="shell">
+  <h2>Install in one line</h2>
+  <p class="sub">Linux with GTK4 and VTE. The installer detects your distro (Arch, Fedora, Debian/Ubuntu), installs whatever is missing (asking before <code>sudo</code>) and puts the app in <code>~/.local</code>, no root required.</p>
   <pre><code>curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
   <pre><code>wget -qO- https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
-  <p>Depois: <code>gh auth login</code>, <code>devraid install</code> (registra hooks e MCP no Claude Code e no Codex) e <code>devraid</code> para abrir.</p>
-  <p class="fine">Rodar script da internet é confiar nele: <a href="install.sh">leia o install.sh</a> antes, ou fixe uma versão com <code>DEVRAID_REF=v0.2.0</code>. Para remover: <code>… | sh -s -- --uninstall</code>.</p>
-  <p><a class="btn p" href="guia.html#instalacao">Outras formas de instalar →</a> <a class="btn" href="guia.html">Ler o guia</a></p>
+  <p>Then: <code>gh auth login</code>, <code>devraid install</code> (registers hooks and MCP in Claude Code and Codex) and <code>devraid</code> to open it.</p>
+  <p class="fine">Running a script from the internet means trusting it: <a href="install.sh">read install.sh</a> first, or pin a version with <code>DEVRAID_REF=v0.2.0</code>. To remove: <code>… | sh -s -- --uninstall</code>.</p>
+  <p><a class="btn p" href="guide.html#install">Other ways to install →</a> <a class="btn" href="guide.html">Read the guide</a></p>
 </div></section>
 </main>
 
 <footer><div class="shell">
-  /dev/raid · MIT · feito por <a href="https://github.com/kleber-code">kleber-code</a> ·
-  <a href="https://github.com/kleber-code/dev-raid">código-fonte</a> · um projeto da <a href="https://www.satela.com.br">Satela</a>
+  /dev/raid · MIT · made by <a href="https://github.com/kleber-code">kleber-code</a> ·
+  <a href="https://github.com/kleber-code/dev-raid">source code</a> · a <a href="https://www.satela.com.br">Satela</a> project
 </div></footer>
 </body>
 </html>

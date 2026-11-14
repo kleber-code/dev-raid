@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""devraid - ponto de entrada único do /dev/raid.
+"""devraid - single entry point of /dev/raid.
 
-  devraid                 abre o app (janela)
-  devraid <comando> ...   CLI: ls, add, rm, open, repos, usage, mem, secret, mcp, hook, install, ...
+  devraid                 open the app (window)
+  devraid <command> ...   CLI: ls, add, rm, open, repos, usage, mem, secret, mcp, hook, install, update, ...
   devraid --version
 """
 import os, sys
 
-AQUI = os.path.dirname(os.path.realpath(__file__))
-VERSION = "0.2.0"
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, ".."))
+from raidpoint.core import VERSION
 
 def main():
     a = sys.argv[1:]
     if a[:1] in (["--version"], ["-V"], ["version"]):
         print(f"devraid {VERSION}"); return
     if not a or a[0] in ("gui", "--gui"):
-        alvo = os.path.join(AQUI, "devraid-gui")
-        os.execv(sys.executable, [sys.executable, alvo])
-    alvo = os.path.join(AQUI, "raidpoint")
-    os.execv(sys.executable, [sys.executable, alvo, *a])
+        target = os.path.join(HERE, "devraid-gui")
+        os.execv(sys.executable, [sys.executable, target])
+    target = os.path.join(HERE, "raidpoint")
+    os.execv(sys.executable, [sys.executable, target, *a])
 
 if __name__ == "__main__":
     main()

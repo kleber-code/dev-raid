@@ -3,14 +3,12 @@
   <id>br.com.satela.DevRaid</id>
   <name>/dev/raid</name>
   <summary>Orchestrate many AI coding agents in persistent terminals</summary>
-  <summary xml:lang="pt_BR">Orquestre vários agentes de IA em terminais persistentes</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <developer id="io.github.kleber-code"><name>kleber-code</name></developer>
   <description>
     <p>/dev/raid runs Claude Code, Codex, Aider and other AI coding agents side by side: one persistent terminal workspace per project, powered by tmux, that keeps running when you close the window.</p>
     <p>Each agent can work in its own git worktree, you review the diff before accepting, and everything is keyboard driven.</p>
-    <p xml:lang="pt_BR">O /dev/raid roda Claude Code, Codex, Aider e outros agentes lado a lado: um conjunto de terminais persistentes por projeto, com tmux, que continua vivo quando você fecha a janela.</p>
   </description>
   <launchable type="desktop-id">br.com.satela.DevRaid.desktop</launchable>
   <url type="homepage">https://kleber-code.github.io/dev-raid/</url>

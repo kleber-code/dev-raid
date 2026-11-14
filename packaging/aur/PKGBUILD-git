@@ -1,5 +1,5 @@
 # Maintainer: kleber-code <https://github.com/kleber-code>
-# Pacote devraid-git (último commit). Para publicar no AUR, copie este arquivo como "PKGBUILD" em um repo "devraid-git".
+# devraid-git package (latest commit). To publish it on the AUR, copy this file as "PKGBUILD" into a "devraid-git" repo.
 pkgname=devraid-git
 pkgver=0.2.0.r0.g0000000
 pkgrel=1

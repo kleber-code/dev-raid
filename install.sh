@@ -1,17 +1,17 @@
 #!/bin/sh
-# /dev/raid — instalador.
+# /dev/raid — installer.
 #
 #   curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh
 #   wget -qO-  https://kleber-code.github.io/dev-raid/install.sh | sh
 #
-# Opções (variáveis de ambiente, ou argumentos depois de `sh -s --`):
-#   DEVRAID_REF=v0.2.0     versão (tag ou branch). Padrão: a última release; sem release, main
-#   DEVRAID_PREFIX=...     onde instalar. Padrão: ~/.local (sem sudo). Ex.: /usr/local
-#   DEVRAID_YES=1          não perguntar antes de instalar dependências do sistema
-#   DEVRAID_SRC=/caminho   usar este checkout em vez de baixar (desenvolvimento/offline)
-#   --uninstall            remove o /dev/raid (não apaga ~/.raid_point, onde ficam seus dados)
+# Options (environment variables, or arguments after `sh -s --`):
+#   DEVRAID_REF=v0.2.0     version (tag or branch). Default: the latest release; if none, main
+#   DEVRAID_PREFIX=...     where to install. Default: ~/.local (no sudo). E.g.: /usr/local
+#   DEVRAID_YES=1          do not ask before installing system dependencies
+#   DEVRAID_SRC=/path      use this checkout instead of downloading (development/offline)
+#   --uninstall            remove /dev/raid (does not delete ~/.raid_point, where your data lives)
 #
-# Leia antes de rodar, se preferir:  curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | less
+# Read it before running, if you prefer:  curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | less
 set -eu
 
 REPO="kleber-code/dev-raid"
@@ -29,42 +29,42 @@ for a in "$@"; do
 done
 
 say()  { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33maviso:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31merro:\033[0m %s\n' "$*" >&2; exit 1; }
+warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-[ "$(uname -s)" = "Linux" ] || die "o /dev/raid roda em Linux (GTK4 + tmux)."
+[ "$(uname -s)" = "Linux" ] || die "/dev/raid runs on Linux (GTK4 + tmux)."
 
-# ---------------------------------------------------------------- desinstalar
+# ---------------------------------------------------------------- uninstall
 if [ "$ACTION" = "uninstall" ]; then
-  say "removendo de $PREFIX"
+  say "removing from $PREFIX"
   rm -rf "$PREFIX/lib/devraid"
   rm -f  "$PREFIX/bin/devraid" "$PREFIX/bin/raidpoint" "$PREFIX/share/applications/br.com.satela.DevRaid.desktop" \
          "$PREFIX/share/icons/hicolor/scalable/apps/devraid.svg" "$PREFIX/share/metainfo/br.com.satela.DevRaid.metainfo.xml"
   for s in 512 256 128 64 48 32 16; do rm -f "$PREFIX/share/icons/hicolor/${s}x${s}/apps/devraid.png"; done
-  say "pronto. Seus dados continuam em ~/.raid_point (apague à mão se quiser)."
+  say "done. Your data is still in ~/.raid_point (delete it by hand if you want)."
   exit 0
 fi
 
-# ---------------------------------------------------------------- baixar
-download() {   # download URL DESTINO
+# ---------------------------------------------------------------- download
+download() {   # download URL DEST
   if have curl; then curl -fsSL "$1" -o "$2"
   elif have wget; then wget -qO "$2" "$1"
-  else die "preciso de curl ou wget."; fi
+  else die "curl or wget is required."; fi
 }
 fetch_stdout() {
-  if have curl; then curl -fsSL "$1"; elif have wget; then wget -qO- "$1"; else die "preciso de curl ou wget."; fi
+  if have curl; then curl -fsSL "$1"; elif have wget; then wget -qO- "$1"; else die "curl or wget is required."; fi
 }
 
-# ---------------------------------------------------------------- dependências
+# ---------------------------------------------------------------- dependencies
 PY_OK=0
 python3 -c 'import sys, gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91"); sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null && PY_OK=1
 
-faltando=""
-[ "$PY_OK" = 1 ] || faltando="$faltando python3>=3.11+gtk4+vte"
-for c in tmux gh secret-tool tar make; do have "$c" || faltando="$faltando $c"; done
+missing=""
+[ "$PY_OK" = 1 ] || missing="$missing python3>=3.11+gtk4+vte"
+for c in tmux gh secret-tool tar make; do have "$c" || missing="$missing $c"; done
 
-if [ -n "$faltando" ]; then
+if [ -n "$missing" ]; then
   . /etc/os-release 2>/dev/null || true
   fam="${ID:-} ${ID_LIKE:-}"
   case "$fam" in
@@ -73,54 +73,54 @@ if [ -n "$faltando" ]; then
     *debian*|*ubuntu*) PM="apt-get install -y"; PKGS="python3-gi gir1.2-gtk-4.0 gir1.2-vte-3.91 tmux gh libsecret-tools mosh make" ;;
     *) PM=""; PKGS="" ;;
   esac
-  say "faltando:$faltando"
+  say "missing:$missing"
   if [ -z "$PM" ]; then
-    die "não conheço o gerenciador de pacotes desta distro. Instale: GTK4, VTE 3.91 (com PyGObject), tmux, gh, libsecret (secret-tool), make — e rode de novo."
+    die "unknown package manager for this distro. Install: GTK4, VTE 3.91 (with PyGObject), tmux, gh, libsecret (secret-tool), make — then run again."
   fi
-  SUDO=""; [ "$(id -u)" = 0 ] || { have sudo && SUDO="sudo" || die "preciso de root para instalar: $PKGS"; }
-  say "vou rodar:  $SUDO $PM $PKGS"
+  SUDO=""; [ "$(id -u)" = 0 ] || { have sudo && SUDO="sudo" || die "root is required to install: $PKGS"; }
+  say "will run:  $SUDO $PM $PKGS"
   if [ "$YES" != 1 ]; then
     if [ -r /dev/tty ]; then
-      printf 'Continuar? [S/n] ' > /dev/tty; read -r r < /dev/tty || r=n
-      case "$r" in n|N|nao|não) die "cancelado. Instale as dependências e rode de novo." ;; esac
-    else die "sem terminal para confirmar. Rode com DEVRAID_YES=1 ou instale as dependências antes."; fi
+      printf 'Continue? [Y/n] ' > /dev/tty; read -r r < /dev/tty || r=n
+      case "$r" in n|N|no|No|NO) die "cancelled. Install the dependencies and run again." ;; esac
+    else die "no terminal to confirm. Run with DEVRAID_YES=1 or install the dependencies first."; fi
   fi
   # shellcheck disable=SC2086
   $SUDO $PM $PKGS
 fi
 
-# ---------------------------------------------------------------- obter o código
+# ---------------------------------------------------------------- get the code
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 if [ -n "$SRC" ]; then
-  [ -f "$SRC/Makefile" ] || die "DEVRAID_SRC=$SRC não parece o código do /dev/raid."
-  DIR="$SRC"; say "usando $DIR"
+  [ -f "$SRC/Makefile" ] || die "DEVRAID_SRC=$SRC does not look like the /dev/raid source."
+  DIR="$SRC"; say "using $DIR"
 else
   if [ -z "$REF" ]; then
     REF="$(fetch_stdout "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
            | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
     [ -n "$REF" ] || REF="main"
   fi
-  say "baixando $REPO @ $REF"
+  say "downloading $REPO @ $REF"
   download "https://codeload.github.com/$REPO/tar.gz/$REF" "$TMP/src.tar.gz"
   tar -xzf "$TMP/src.tar.gz" -C "$TMP"
   DIR="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n1)"
-  [ -f "$DIR/Makefile" ] || die "o pacote baixado não tem Makefile (ref '$REF' existe?)."
+  [ -f "$DIR/Makefile" ] || die "the downloaded archive has no Makefile (does ref '$REF' exist?)."
 fi
 
-# ---------------------------------------------------------------- instalar
-say "instalando em $PREFIX"
+# ---------------------------------------------------------------- install
+say "installing into $PREFIX"
 make -s -C "$DIR" install PREFIX="$PREFIX"
 have update-desktop-database && update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
 have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true
 
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
-  *) warn "$PREFIX/bin não está no seu PATH. Adicione ao seu shell:  export PATH=\"$PREFIX/bin:\$PATH\"" ;;
+  *) warn "$PREFIX/bin is not in your PATH. Add this to your shell:  export PATH=\"$PREFIX/bin:\$PATH\"" ;;
 esac
 
-printf '\n\033[1;32m/dev/raid instalado.\033[0m  Próximos passos:\n\n'
-printf '  gh auth login        # uma vez (lista de repositórios, CI e PRs)\n'
-printf '  devraid install      # registra hooks e MCP no Claude Code e no Codex\n'
-printf '  devraid              # abre o app\n\n'
-printf 'Documentação: https://kleber-code.github.io/dev-raid/guia.html\n'
-printf 'Desinstalar:  curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh -s -- --uninstall\n'
+printf '\n\033[1;32m/dev/raid installed.\033[0m  Next steps:\n\n'
+printf '  gh auth login        # once (repository list, CI and PRs)\n'
+printf '  devraid install      # registers hooks and MCP in Claude Code and Codex\n'
+printf '  devraid              # opens the app\n\n'
+printf 'Documentation: https://kleber-code.github.io/dev-raid/guide.html\n'
+printf 'Uninstall:    curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh -s -- --uninstall\n'

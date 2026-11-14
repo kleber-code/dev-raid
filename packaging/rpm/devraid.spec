@@ -28,7 +28,7 @@ agents can orchestrate each other. GTK4 + VTE.
 %autosetup -n dev-raid-%{version}
 
 %build
-# nada a compilar (Python puro)
+# nothing to build (pure Python)
 
 %install
 make install DESTDIR=%{buildroot} PREFIX=%{_prefix}
@@ -48,4 +48,4 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/br.com.satela.DevRaid
 
 %changelog
 * Fri Nov 13 2026 kleber-code <kleber.code@gmail.com> - 0.2.0-1
-- Primeira versão empacotada
+- First packaged release

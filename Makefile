@@ -1,4 +1,4 @@
-# /dev/raid — instalação.   make install PREFIX=/usr   |   make install PREFIX=$HOME/.local
+# /dev/raid — installation.   make install PREFIX=/usr   |   make install PREFIX=$HOME/.local
 PREFIX ?= /usr/local
 DESTDIR ?=
 LIBDIR  = $(DESTDIR)$(PREFIX)/lib/devraid

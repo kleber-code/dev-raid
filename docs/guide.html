@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide — /dev/raid</title>
+<meta name="description" content="The complete /dev/raid guide: installation, projects, agents, worktrees, shortcuts, settings, updates, MCP, memory, secrets and security.">
+<meta property="og:title" content="/dev/raid guide">
+<meta property="og:description" content="Everything you need to go from zero to several AI coding agents working in parallel, one terminal workspace per project.">
+<meta property="og:image" content="https://kleber-code.github.io/dev-raid/img/og.png">
+<link rel="canonical" href="https://kleber-code.github.io/dev-raid/guide.html">
+<meta name="theme-color" content="#11111b">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="shell">
+  <a class="brand" href="./"><img src="logo.svg" alt="" width="26" height="26">/dev/<b>raid</b></a>
+  <nav>
+    <a href="./#features">Features</a>
+    <a href="./#install">Install</a>
+    <a class="on" href="guide.html">Guide</a>
+    <a class="gh" href="https://github.com/kleber-code/dev-raid">GitHub</a>
+  </nav>
+</div></header>
+
+<div class="shell doc">
+<aside class="toc">
+  <h4>Get started</h4>
+  <a href="#install">Installation</a>
+  <a href="#getting-started">First steps</a>
+  <a href="#concepts">Concepts</a>
+  <h4>Use</h4>
+  <a href="#projects">Projects and repos</a>
+  <a href="#panes">Panes and layouts</a>
+  <a href="#agents">Agents and worktrees</a>
+  <a href="#orchestration">Orchestration</a>
+  <a href="#actions">Actions (Ctrl+D)</a>
+  <a href="#changes">Changes and commits</a>
+  <a href="#agents-panel">Agents panel</a>
+  <a href="#remote">Remote servers</a>
+  <a href="#copy-paste">Copy, paste and links</a>
+  <a href="#usage">Plan usage</a>
+  <h4>Customize</h4>
+  <a href="#settings">Settings</a>
+  <a href="#shortcuts">Shortcuts</a>
+  <a href="#updates">Updates</a>
+  <a href="#sway">Sway / i3</a>
+  <h4>For the agents</h4>
+  <a href="#mcp">MCP server</a>
+  <a href="#memory">Memory</a>
+  <a href="#secrets">Secrets</a>
+  <h4>Reference</h4>
+  <a href="#security">Security and limits</a>
+  <a href="#cli">Command line</a>
+  <a href="#files">Files and variables</a>
+  <a href="#troubleshooting">Troubleshooting</a>
+  <a href="#development">Development</a>
+</aside>
+
+<article>
+<h1>The /dev/raid guide</h1>
+<p class="lede">Everything you need to go from zero to several AI agents working in parallel, each project in its own place.</p>
+
+<h2 id="install">Installation</h2>
+<p>/dev/raid is a Python desktop app (GTK4 + VTE) with tmux under the hood. It runs on Linux, under Wayland (sway) or X11.</p>
+<h3>Dependencies</h3>
+<table>
+<tr><th>Requires</th><th>What for</th></tr>
+<tr><td>Python 3.11+, GTK4, VTE 3.91, PyGObject</td><td>the window and the terminals</td></tr>
+<tr><td><code>tmux</code></td><td>persistent sessions (the app runs its own server, separate from your tmux)</td></tr>
+<tr><td><code>gh</code> (GitHub CLI)</td><td>repo list, CI and PRs. The app reuses your existing <code>gh auth login</code></td></tr>
+<tr><td><code>libsecret</code> (<code>secret-tool</code>) and a keyring</td><td>per-project secrets</td></tr>
+<tr><td><code>mosh</code> (optional)</td><td>remote projects; falls back to ssh without it</td></tr>
+</table>
+<pre><code># Arch
+sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring mosh noto-fonts
+
+# Fedora
+sudo dnf install python3-gobject gtk4 vte291-gtk4 tmux gh libsecret mosh</code></pre>
+<h3>One-line install</h3>
+<p>The quickest way. It detects your distro (Arch, Fedora, Debian/Ubuntu), installs any missing dependencies (asking before it uses <code>sudo</code>) and installs /dev/raid into <code>~/.local</code>, no root required:</p>
+<pre><code>curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
+<p>or, with <code>wget</code>:</p>
+<pre><code>wget -qO- https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
+<p>Then:</p>
+<pre><code>gh auth login        # once
+devraid install      # registers hooks and MCP in Claude Code and Codex
+devraid              # opens the app</code></pre>
+<div class="note warn"><p><strong>Running a script from the internet means trusting it.</strong> Read it first with <code>curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | less</code> (about 130 lines) or pin a version: <code>curl -fsSL …/install.sh | DEVRAID_REF=v0.2.0 sh</code>.</p></div>
+<table>
+<tr><th>Variable / option</th><th>Effect</th></tr>
+<tr><td><code>DEVRAID_REF=v0.2.0</code></td><td>installs that version (tag or branch). Default: the latest release; if there is none, <code>main</code></td></tr>
+<tr><td><code>DEVRAID_PREFIX=/usr/local</code></td><td>where to install (default <code>~/.local</code>; anywhere else needs <code>sudo</code>)</td></tr>
+<tr><td><code>DEVRAID_YES=1</code></td><td>don't ask before installing system dependencies</td></tr>
+<tr><td><code>sh -s -- --uninstall</code></td><td>removes /dev/raid (your data in <code>~/.raid_point</code> is kept)</td></tr>
+</table>
+<h3>Packages</h3>
+<table>
+<tr><th>Where</th><th>Status</th></tr>
+<tr><td>Arch / AUR</td><td><code>PKGBUILD</code> (and <code>devraid-git</code>) ready in <code>packaging/aur/</code>. <strong>Not yet published</strong> to the AUR. Meanwhile: <code>git clone</code> + <code>makepkg -si</code> inside <code>packaging/aur</code>, or use the one-line install.</td></tr>
+<tr><td>Fedora / RPM</td><td><code>devraid.spec</code> in <code>packaging/rpm/</code> (built and tested). No repository (COPR) yet.</td></tr>
+<tr><td>pip / Flatpak</td><td>not offered: the app needs tmux, <code>gh</code> and the system keyring, which a sandboxed package can't see.</td></tr>
+</table>
+<h3>Manual install</h3>
+<pre><code>git clone https://github.com/kleber-code/dev-raid.git
+cd dev-raid
+sudo make install PREFIX=/usr/local     # or: make install PREFIX=$HOME/.local
+make uninstall PREFIX=/usr/local</code></pre>
+<p>This copies everything into <code>PREFIX/lib/devraid</code> and creates <code>devraid</code> and <code>raidpoint</code> in <code>PREFIX/bin</code>, plus the icon and the menu entry. For development, run straight from the clone: <code>python3 bin/devraid</code>.</p>
+<div class="note"><p><strong>Names.</strong> The app is <code>devraid</code>: with no arguments it opens the window, and with a verb it's the command line (<code>devraid ls</code>, <code>devraid mcp</code>…). The <code>raidpoint</code> command still exists as a legacy alias. The data folder <code>~/.raid_point</code> and the <code>raidpoint</code> MCP server keep their names on purpose, so existing installs and configs keep working.</p></div>
+
+<h2 id="getting-started">First steps</h2>
+<ol>
+<li>Open <code>devraid</code>. Click <strong>＋ New project</strong> and pick a folder that is a git repository (or use the <strong>Repos</strong> tab to clone one from GitHub).</li>
+<li>Click <strong>＋ Agent</strong> (or <kbd>Ctrl</kbd>+<kbd>D</kbd>) and choose <em>Agent: Claude</em>. A pane opens with the agent running in the project folder.</li>
+<li>Open another agent next to it — say <em>Agent: Codex in isolated worktree</em> — and split the screen with <kbd>Alt</kbd>+<kbd>\</kbd> or <kbd>Alt</kbd>+<kbd>-</kbd>.</li>
+<li>When an agent is done, press <kbd>Ctrl</kbd>+<kbd>G</kbd> to see what changed and commit.</li>
+<li>Close the window. The agents keep running. Open the app again and everything is still there.</li>
+</ol>
+<img src="img/main.webp" width="1400" height="780" alt="Main window with four panes and the agents panel">
+
+<h2 id="concepts">Concepts</h2>
+<table>
+<tr><th>Term</th><th>What it is</th></tr>
+<tr><td>Project</td><td>A git folder. Each project has its own <strong>tmux session</strong>, with its panes and tabs.</td></tr>
+<tr><td>Pane</td><td>A terminal inside the session. Its name shows on the border (Claude, Codex, Shell…).</td></tr>
+<tr><td>Tab</td><td>A tmux “window”: a set of panes. Switch with <kbd>Alt</kbd>+1…9.</td></tr>
+<tr><td>Agent</td><td>A program preset (name + command), such as <code>claude</code> or <code>codex</code>. You edit the list in Settings.</td></tr>
+<tr><td>Worktree</td><td>A working copy of the repository in another folder and branch, so an agent can work without conflicts.</td></tr>
+</table>
+
+<h2 id="projects">Projects and repos</h2>
+<p>The sidebar has two tabs:</p>
+<ul>
+<li><strong>Projects</strong> — what you're working on. A green dot means the session is alive. A badge shows the agents' state: <code>!</code> needs attention, <code>…</code> working, <code>✓</code> done, <code>✗</code> failed.</li>
+<li><strong>Repos</strong> — all your GitHub repositories (account and organizations), via <code>gh</code>. Opening a repo <strong>clones</strong> it into <code>~/.raid_point/workspaces/&lt;repo&gt;</code> and turns it into a project.</li>
+</ul>
+<p>Projects must be git repositories: that's what makes worktrees, diffs and PRs possible. To remove a project, use the palette (<em>Project: remove…</em>). The app asks first and <strong>closes that project's terminals</strong>; the folder and its files are not deleted.</p>
+<p>The window title shows the branch, how many files are modified, the open PR and the state of the CI checks.</p>
+
+<h2 id="panes">Panes and layouts</h2>
+<p>Splitting, moving and closing panes is handled by tmux, so it works in any project and survives closing the app.</p>
+<table>
+<tr><th>Action</th><th>Shortcut</th></tr>
+<tr><td>Split side by side / below</td><td><kbd>Alt</kbd>+<kbd>\</kbd> / <kbd>Alt</kbd>+<kbd>-</kbd></td></tr>
+<tr><td>Move focus between panes</td><td><kbd>Alt</kbd>+arrows</td></tr>
+<tr><td>Swap pane position</td><td><kbd>Alt</kbd>+<kbd>Shift</kbd>+arrows</td></tr>
+<tr><td>Zoom pane (full screen)</td><td><kbd>Alt</kbd>+<kbd>z</kbd></td></tr>
+<tr><td>Close pane (asks first)</td><td><kbd>Alt</kbd>+<kbd>w</kbd></td></tr>
+<tr><td>New tab</td><td><kbd>Alt</kbd>+<kbd>t</kbd></td></tr>
+<tr><td>Go to tab N</td><td><kbd>Alt</kbd>+1…9</td></tr>
+<tr><td>Previous / next tab</td><td><kbd>Ctrl</kbd>+<kbd>PageUp</kbd> / <kbd>PageDown</kbd></td></tr>
+</table>
+<p>The automatic layout for new panes is picked in the palette (<em>Layout: …</em>): columns, rows, grid, main left or main top. The tmux prefix is <kbd>Ctrl</kbd>+<kbd>a</kbd>.</p>
+<p>To type into <strong>all panes at once</strong>, use <em>Panes: type in all</em> in the palette. The actions button turns yellow while it's on.</p>
+<p>The <strong>right mouse button</strong> opens an app menu (not tmux's, nor the one from the program inside the terminal), so it works in any pane: copy, paste, open link, split, zoom, move to new tab and close pane.</p>
+
+<h2 id="agents">Agents and worktrees</h2>
+<p>Open an agent with the <strong>＋ Agent</strong> button or from the palette. The built-in presets are Claude, Codex, Aider, Ollama and Shell (see <a href="#settings">Settings</a> to edit them).</p>
+<p>Agents start inside an <strong>interactive login shell</strong>, so CLIs installed in <code>~/.local/bin</code>, through nvm and the like are found even when /dev/raid is launched from the desktop menu. When the agent exits, the pane drops to a shell instead of closing.</p>
+<h3>Isolated worktree</h3>
+<p>Every preset with a command also has an <em>“in isolated worktree”</em> variant. It creates a working copy of the repository and opens the agent there:</p>
+<ul>
+<li>folder: <code>&lt;repo&gt;-wt/&lt;agent&gt;-N</code> (next to the repository)</li>
+<li>branch: <code>agent/&lt;agent&gt;-N</code></li>
+</ul>
+<p>That way two agents can edit the same project without conflicts, and you review and merge each branch afterwards. If the worktree can't be created (for example, a repository with no commits yet), /dev/raid <strong>won't open the agent without isolation</strong>: it shows the error instead of running in the main directory by mistake.</p>
+
+<h2 id="orchestration">Orchestration</h2>
+<p>There are three levels, from most manual to most automatic.</p>
+<h3>1. Parallel task</h3>
+<p>In the palette (<kbd>Ctrl</kbd>+<kbd>D</kbd>), choose <em>Orchestrate: parallel task…</em>. Write the task once, say how many copies of each agent you want and launch. Each agent opens in its own worktree with the task already handed over; afterwards you compare the results in <a href="#changes">Changes</a>.</p>
+<img src="img/parallel.webp" width="720" height="560" loading="lazy" alt="Parallel task dialog with a task written, 1 copy of Claude, 1 of Codex and the worktree option checked">
+<ul>
+<li>Several copies of the <em>same</em> agent are useful for comparing approaches (“three Claudes, I'll pick the best”).</li>
+<li>Claude, Codex, Gemini and similar get the task as a startup argument (reliable). Other agents open empty and the task is typed into them.</li>
+<li>If a worktree fails (for example, a repository with no commits), that agent <strong>is not opened</strong> and the error is listed; the others go ahead.</li>
+<li><kbd>Ctrl</kbd>+<kbd>Enter</kbd> launches; <kbd>Esc</kbd> cancels.</li>
+</ul>
+<h3>2. Orchestrator agent</h3>
+<p><em>Orchestrate: open orchestrator agent</em> opens a Claude already instructed to act as the coordinator. You describe the goal and it, on its own:</p>
+<ol>
+<li>splits the work into independent parts;</li>
+<li>opens one agent per part, in worktrees, through the MCP server (<code>spawn_agent</code> with <code>prompt</code>), choosing Claude or Codex and checking <code>usage</code> so it doesn't blow through your quota;</li>
+<li>follows progress with <code>list_agents</code> and <code>read_output</code>;</li>
+<li>at the end, summarizes what each one did and lists the <code>agent/*</code> branches for you to review.</li>
+</ol>
+<p>It <strong>never merges or pushes on its own</strong>. Requires the MCP server to be registered (<code>devraid install</code>).</p>
+<h3>3. Claude Code's own subagents</h3>
+<p>Claude Code already spawns subagents by itself. The agents panel shows each one with its status (via hooks) and the transcript on click. This works for any session, orchestrated or not.</p>
+<div class="note"><p>All three keep everything visible in your panes: you always see who is running, in which folder and on which branch.</p></div>
+
+<h2 id="actions">Actions (Ctrl+D)</h2>
+<p>The actions palette is the fastest way to do anything. Type part of the name (accents don't matter), use ↑ ↓ and <kbd>Enter</kbd>. <kbd>Esc</kbd> closes it.</p>
+<img src="img/palette.webp" width="560" height="420" loading="lazy" alt="Actions palette filtered by agent">
+<ul>
+<li><strong>Agent: …</strong> — opens an agent (with or without a worktree)</li>
+<li><strong>Pane: …</strong> — new shell, new tab, zoom, close</li>
+<li><strong>Layout: …</strong> — columns, rows, grid…</li>
+<li><strong>Changes</strong>, <strong>Agents panel</strong>, <strong>Project list</strong>, <strong>Secrets</strong></li>
+<li><strong>Text: …</strong> — bigger, smaller, normal size</li>
+<li><strong>Project: …</strong> — switch to another project (or remove the current one)</li>
+<li><strong>Check for updates</strong>, <strong>Restart /dev/raid</strong> (see <a href="#updates">Updates</a>)</li>
+<li><strong>Settings</strong></li>
+</ul>
+<div class="note warn"><p><strong><kbd>Ctrl</kbd>+<kbd>D</kbd> is the terminal's “end of input”.</strong> Since the app captures this shortcut, it never reaches the shell or the agents: to leave a shell use <code>exit</code>, and <code>/exit</code> in Claude Code. If you'd rather keep the terminal's <kbd>Ctrl</kbd>+<kbd>D</kbd>, change the shortcut in <a href="#settings">Settings → Shortcuts</a>.</p></div>
+
+<h2 id="changes">Changes and commits</h2>
+<p><kbd>Ctrl</kbd>+<kbd>G</kbd> (or the pencil button in the header) opens the review window.</p>
+<img src="img/changes.webp" width="1400" height="780" loading="lazy" alt="Changes window with the diff of src/api.py">
+<ul>
+<li>The selector at the top picks the folder: the main project or any agent's worktree.</li>
+<li>The list shows every modified file: <code>~</code> modified, <code>+</code> new, <code>−</code> deleted, <code>→</code> renamed.</li>
+<li>The colored diff appears alongside. New files show up in full as additions.</li>
+<li><strong>Revert this file</strong> discards the changes <em>to that file only</em>, after asking for confirmation. It can't be undone.</li>
+<li><strong>Commit all</strong> stages every file in the list and commits with your message. It does not <code>push</code>.</li>
+</ul>
+<p>Not available for remote projects yet.</p>
+
+<h2 id="agents-panel">Agents panel</h2>
+<p><kbd>Ctrl</kbd>+<kbd>J</kbd> shows, on the right:</p>
+<ul>
+<li>The project's <strong>panes</strong>, with what's running in each one and whether it's active or idle.</li>
+<li>Claude Code <strong>AI sessions and subagents</strong>, with status. Clicking opens the transcript in a pane.</li>
+<li>Recent <strong>commits</strong> on the current branch.</li>
+<li>GitHub <strong>CI / Actions</strong> for the branch.</li>
+<li>Recent project <strong>memory</strong>.</li>
+</ul>
+<p>Sessions and subagents come from Claude Code <em>hooks</em> (installed by <code>devraid install</code>). Codex and Aider don't emit these events, so they only show up as panes.</p>
+<p>When an agent is waiting for you, the sidebar shows the <code>!</code> badge and the app sends a desktop notification; clicking it opens the project.</p>
+
+<h2 id="remote">Remote servers</h2>
+<p>In <strong>＋ New project → SSH / mosh server…</strong>, pick a host from your <code>~/.ssh/config</code>. /dev/raid connects with <code>mosh</code> (or ssh, if mosh isn't available) and <strong>tmux runs on the server</strong>: if your connection drops or your laptop goes to sleep, the work carries on. Remote projects show a blue dot.</p>
+<p>If the connection drops right after opening, the app shows a warning and retries in 5 seconds.</p>
+
+<h2 id="copy-paste">Copy, paste and links</h2>
+<table>
+<tr><th>Action</th><th>How</th></tr>
+<tr><td>Copy</td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> or <kbd>Ctrl</kbd>+<kbd>Insert</kbd></td></tr>
+<tr><td>Paste</td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> or <kbd>Shift</kbd>+<kbd>Insert</kbd></td></tr>
+<tr><td>Copy with the mouse</td><td>drag inside tmux: the text goes straight to the clipboard (and the primary selection)</td></tr>
+<tr><td>Native selection</td><td><kbd>Shift</kbd>+drag</td></tr>
+<tr><td>Open link</td><td><kbd>Ctrl</kbd>+click (URLs and terminal hyperlinks)</td></tr>
+</table>
+
+<h2 id="usage">Plan usage</h2>
+<p>The <strong>◔ usage</strong> button in the header summarizes Claude Code consumption: tokens over the last 5 hours, 24 hours and 7 days, per project and model, read from the local transcripts.</p>
+<p>To see the <strong>actual plan percentage</strong> (the same 5-hour and weekly limits Claude shows), enable the statusLine:</p>
+<pre><code>devraid install-statusline</code></pre>
+<p>It only installs itself if you don't have a statusLine configured yet. The app warns you when a limit is about to run out.</p>
+<h3>Codex</h3>
+<p>Codex writes its own limits to its logs (<code>~/.codex/sessions</code>), so there's nothing to set up. The panel shows the <strong>5-hour and weekly percentage</strong>, when it resets, the plan type and the <strong>credit balance</strong> (if the account has one). The header button then reads, for example, <code>◔ 5h 12% · cx 5%</code>. The data comes from your last Codex use: if you haven't used it in a while, the window has already reset and it won't show up.</p>
+<p>The CLI shows the same: <code>devraid usage</code>. The MCP server exposes <code>claude_plan</code> and <code>codex_plan</code> in the <code>usage</code> tool, so the orchestrator can decide how many agents to launch.</p>
+
+<h2 id="settings">Settings</h2>
+<p><kbd>Ctrl</kbd>+<kbd>,</kbd> or the ⚙ button in the header. Everything is saved instantly — there's no “save” button.</p>
+<img src="img/settings.webp" width="1100" height="440" loading="lazy" alt="Settings window, Terminal page, with the monospace font search">
+<h3>Terminal</h3>
+<ul>
+<li><strong>Font</strong> — lists only the installed monospace fonts, with search. A sample previews your choice.</li>
+<li><strong>Font size</strong> (pt) and <strong>zoom</strong> (50% to 300%, also via <kbd>Ctrl</kbd>+<kbd>+</kbd>, <kbd>Ctrl</kbd>+<kbd>−</kbd>, <kbd>Ctrl</kbd>+<kbd>0</kbd> and <kbd>Ctrl</kbd>+scroll).</li>
+<li><strong>Zoom step</strong> — how much each <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>−</kbd> changes.</li>
+</ul>
+<h3>Appearance</h3>
+<img src="img/appearance.webp" width="1100" height="299" loading="lazy" alt="Appearance page: theme, accent color, cursor and sidebar width">
+<ul>
+<li><strong>Color theme</strong> — Catppuccin Mocha, Tokyo Night, Gruvbox Dark or Nord. Changes the whole interface, the terminal and the tmux borders and tabs.</li>
+<li><strong>Accent color</strong> — Theme default, Blue, Green, Yellow or Red.</li>
+<li><strong>Cursor</strong> — Block, Bar or Underline, blinking or not.</li>
+<li><strong>Project list width</strong> — from 140 to 360 px.</li>
+</ul>
+<h3>Shortcuts</h3>
+<p>Click a shortcut and press the new combination. <kbd>Backspace</kbd> removes the shortcut, <kbd>Esc</kbd> cancels. If the combination already belongs to another action, the app warns you instead of overwriting it. The fixed tmux shortcuts are listed below, for reference only.</p>
+<h3>Agents</h3>
+<p>Add, rename or remove presets. Each one is a <strong>name</strong> and a <strong>command</strong> (empty = just a shell). Any CLI works: <code>claude</code>, <code>codex</code>, <code>aider</code>, <code>ollama run llama3</code>, <code>gemini</code>… The list feeds the ＋ Agent button and the palette.</p>
+<h3>Advanced</h3>
+<p>The <strong>Automatic updates</strong> switch (see <a href="#updates">Updates</a>) and where the app's files live, with a button to open each one.</p>
+<h3>Editing by hand</h3>
+<p>The file is <code>~/.raid_point/config.toml</code>. Missing keys use the defaults. If the file is invalid, the app warns in the terminal and falls back to the defaults.</p>
+<pre><code>[terminal]
+font = "Noto Sans Mono 11"
+zoom_step = 0.1
+theme = "Catppuccin Mocha"
+accent = "Theme default"
+cursor = "Block"
+cursor_blink = false
+
+[window]
+sidebar_width = 190
+
+[updates]
+auto = true       # false turns off automatic updates
+
+[keys]            # GTK format; "" disables
+palette = "&lt;Control&gt;d"
+settings = "&lt;Control&gt;comma"
+changes = "&lt;Control&gt;g"
+agents_panel = "&lt;Control&gt;j"
+sidebar = "&lt;Control&gt;b"
+zoom_in = "&lt;Control&gt;plus"
+zoom_out = "&lt;Control&gt;minus"
+zoom_reset = "&lt;Control&gt;0"
+copy = "&lt;Control&gt;&lt;Shift&gt;c"
+paste = "&lt;Control&gt;&lt;Shift&gt;v"</code></pre>
+
+<h2 id="shortcuts">Shortcuts</h2>
+<h3>In the app</h3>
+<table>
+<tr><th>Action</th><th>Default</th></tr>
+<tr><td>Actions (palette)</td><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td></tr>
+<tr><td>Settings</td><td><kbd>Ctrl</kbd>+<kbd>,</kbd></td></tr>
+<tr><td>Changes / diff / commit</td><td><kbd>Ctrl</kbd>+<kbd>G</kbd></td></tr>
+<tr><td>Agents panel</td><td><kbd>Ctrl</kbd>+<kbd>J</kbd></td></tr>
+<tr><td>Project list</td><td><kbd>Ctrl</kbd>+<kbd>B</kbd></td></tr>
+<tr><td>Text bigger / smaller / normal</td><td><kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>−</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd></td></tr>
+<tr><td>Copy / paste</td><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>V</kbd></td></tr>
+</table>
+<p>All of these can be changed in Settings.</p>
+<h3>Panes (tmux)</h3>
+<p>See the table in <a href="#panes">Panes and layouts</a>. These are fixed and work in every project. They live in <code>~/.raid_point/tmux.conf</code> if you want to change them.</p>
+<div class="note"><p>The tmux shortcuts use <kbd>Alt</kbd> on purpose, so they don't steal keys from the shell and the agents (<kbd>Ctrl</kbd>+<kbd>…</kbd> belongs to them). We avoid <kbd>Alt</kbd>+<kbd>Enter</kbd> and <kbd>Alt</kbd>+<kbd>b</kbd>/<kbd>f</kbd> because Claude Code and readline use them.</p></div>
+
+<h2 id="updates">Updates</h2>
+<p>/dev/raid keeps itself up to date. Every few hours the app checks for a new version; what happens next depends on how it was installed:</p>
+<table>
+<tr><th>Installed via</th><th>Automatic update</th></tr>
+<tr><td>Git checkout</td><td>fast-forwards to the new commits — never over local changes</td></tr>
+<tr><td>One-line installer (<code>curl | sh</code>)</td><td>reinstalls the latest GitHub release in the same prefix</td></tr>
+<tr><td>Distro package (AUR / RPM)</td><td>left to your package manager</td></tr>
+</table>
+<p>To update by hand, run <code>devraid update</code> (or <code>raidpoint update</code>); <code>devraid update --check</code> only checks. In the palette, <em>Check for updates</em> does the same, and <em>Restart /dev/raid</em> applies an update — your terminals survive the restart because tmux runs its own server.</p>
+<p>To turn automatic updates off, use <strong>Settings → Advanced → Automatic updates</strong>, or set <code>auto = false</code> under <code>[updates]</code> in <code>~/.raid_point/config.toml</code>.</p>
+
+<h2 id="sway">Sway / i3</h2>
+<p>The window manager handles windows; /dev/raid handles projects and agents. The app's <code>app_id</code> is <code>br.com.satela.DevRaid</code>:</p>
+<pre><code># ~/.config/sway/config
+for_window [app_id="br.com.satela.DevRaid"] move to workspace 2
+assign [app_id="br.com.satela.DevRaid"] workspace 2</code></pre>
+
+<h2 id="mcp">MCP server</h2>
+<p><code>devraid mcp</code> is an MCP server (stdio) that <code>devraid install</code> registers in Claude Code and Codex. With it, the agents themselves can drive the environment:</p>
+<table>
+<tr><th>Tool</th><th>What it does</th></tr>
+<tr><td><code>list_projects</code>, <code>list_repos</code>, <code>open_repo</code></td><td>projects and GitHub repos; clone and register</td></tr>
+<tr><td><code>list_agents</code>, <code>spawn_agent</code></td><td>list panes and open an agent (with <code>worktree=true</code> to isolate it)</td></tr>
+<tr><td><code>send_message</code>, <code>read_output</code></td><td>write to an agent pane and read its last lines (secrets masked)</td></tr>
+<tr><td><code>usage</code>, <code>ci_status</code></td><td>token usage and CI status</td></tr>
+<tr><td><code>memory_add</code>, <code>memory_search</code>, <code>memory_recent</code></td><td>project memory</td></tr>
+<tr><td><code>secret_names</code>, <code>run_with_secrets</code></td><td>secret names, and running a command with them after your approval</td></tr>
+</table>
+<p>This lets an “orchestrator” agent open three agents in different worktrees, send each one a task and read their output — all visible in your panes.</p>
+
+<h2 id="memory">Memory</h2>
+<p>Each project has a memory stored as markdown files, with full-text search (SQLite FTS5). When a Claude Code session starts, the project memory goes into its context. Agents write and query it through MCP; you, through the CLI:</p>
+<pre><code>devraid mem add my-app "we decided to use sqlite instead of postgres"
+devraid mem search my-app sqlite
+devraid mem recent my-app
+devraid mem reindex</code></pre>
+<p>The project name is the second argument (as shown by <code>devraid ls</code>). Only <code>devraid mem recent</code>, with no arguments, figures out the project from your current folder. See the <a href="#security">security limits</a>: memory is read by the agents, so treat whatever gets written there as untrusted.</p>
+
+<h2 id="secrets">Secrets</h2>
+<p>Per-project API keys and passwords, stored in the <strong>system keyring</strong> (libsecret). Agents <strong>only see the names</strong>.</p>
+<ol>
+<li>Add them from the project menu (<em>Secrets…</em>) or the CLI: <code>devraid secret set my-app STRIPE_KEY</code>.</li>
+<li>The agent asks to run a command using the secret (<code>run_with_secrets</code>).</li>
+<li>The app shows an <strong>approval dialog</strong> with the command and the project.</li>
+<li>If you approve, the value goes <strong>only into that command's environment</strong>, and the output comes back with the value masked.</li>
+</ol>
+<div class="note bad"><p><strong>Read the limits below.</strong> This protects against use through the MCP tools; it is not a barrier against an agent that has shell access.</p></div>
+
+<h2 id="security">Security and limits</h2>
+<ul>
+<li><code>send_message</code> only writes directly into <strong>agent</strong> panes (opened by the app, named after a preset other than Shell). Any other pane — shell, ssh, python — asks for your approval.</li>
+<li>The MCP tools <strong>never return the value</strong> of a secret. <code>run_with_secrets</code> only runs after your approval and masks the output (only the exact value, not encoded versions of it).</li>
+<li><strong>An agent with a shell, running as your user, could in theory read the keyring directly (<code>secret-tool</code>) or edit the approval files.</strong> For a real barrier, run agents as a different user or in a sandbox.</li>
+<li>Project memory goes into the context of new sessions: whatever agents write there should be treated as untrusted.</li>
+<li>Alerts for secrets leaking into logs: not implemented yet.</li>
+<li>The app uses your already authenticated <code>gh</code>; it doesn't store GitHub tokens.</li>
+</ul>
+
+<h2 id="cli">Command line</h2>
+<p>Everything is <code>devraid &lt;command&gt;</code> (the legacy <code>raidpoint &lt;command&gt;</code> works the same).</p>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>devraid</code></td><td>opens the app</td></tr>
+<tr><td><code>devraid --version</code></td><td>shows the version</td></tr>
+<tr><td><code>devraid ls</code></td><td>lists projects</td></tr>
+<tr><td><code>devraid add &lt;name&gt; [dir]</code></td><td>registers a project (must be a git repository)</td></tr>
+<tr><td><code>devraid rm &lt;name&gt;</code></td><td>removes the project from the list (doesn't end the session or delete the folder)</td></tr>
+<tr><td><code>devraid open &lt;project&gt;</code></td><td>opens/attaches to the project in the terminal (tmux)</td></tr>
+<tr><td><code>devraid kill &lt;name&gt;</code> / <code>stop</code></td><td>ends a project's tmux session / the whole tmux server</td></tr>
+<tr><td><code>devraid repos</code> / <code>open-repo &lt;owner/repo&gt;</code></td><td>GitHub repos; clone and register</td></tr>
+<tr><td><code>devraid mem …</code> / <code>secret …</code></td><td>memory and secrets</td></tr>
+<tr><td><code>devraid usage</code></td><td>token usage (5h / 24h / 7d, per project)</td></tr>
+<tr><td><code>devraid events</code> / <code>transcript &lt;file&gt; [-f]</code></td><td>latest agent events; view a transcript</td></tr>
+<tr><td><code>devraid update</code> [<code>--check</code>]</td><td>updates /dev/raid now (or only checks for a new version)</td></tr>
+<tr><td><code>devraid install</code></td><td>registers hooks and MCP in Claude Code and Codex (backs up first)</td></tr>
+<tr><td><code>devraid install-statusline</code></td><td>enables the statusLine to show the plan %</td></tr>
+</table>
+
+<h2 id="files">Files and variables</h2>
+<table>
+<tr><th>Path</th><th>Contents</th></tr>
+<tr><td><code>~/.raid_point/config.toml</code></td><td>font, theme, shortcuts, updates</td></tr>
+<tr><td><code>~/.raid_point/agents.json</code></td><td>agent presets</td></tr>
+<tr><td><code>~/.raid_point/projects.json</code></td><td>projects (written atomically, with a lock)</td></tr>
+<tr><td><code>~/.raid_point/tmux.conf</code></td><td>the app's tmux configuration</td></tr>
+<tr><td><code>~/.raid_point/workspaces/</code></td><td>repositories cloned from GitHub</td></tr>
+<tr><td><code>~/.raid_point/data/</code></td><td>agent events, memory and approval requests</td></tr>
+</table>
+<table>
+<tr><th>Variable</th><th>Effect</th></tr>
+<tr><td><code>RAIDPOINT_HOME</code></td><td>changes the data folder</td></tr>
+<tr><td><code>RAIDPOINT_SOCKET</code></td><td>tmux socket name (default <code>tp</code>)</td></tr>
+<tr><td><code>RAIDPOINT_APPID</code></td><td>changes the app ID (to run a second instance)</td></tr>
+<tr><td><code>RAIDPOINT_OPEN</code></td><td>project to open at startup</td></tr>
+<tr><td><code>RAIDPOINT_SHOW</code></td><td><code>changes</code>, <code>palette</code>, <code>settings</code> or <code>parallel</code>: opens that window at startup</td></tr>
+</table>
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3>The app won't open</h3>
+<p>Run <code>devraid</code> in a terminal to see the error. The most common cause is missing GTK4/VTE: check with <code>python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91")'</code>.</p>
+<h3>I want to see the sessions in “real” tmux</h3>
+<p>The app runs its own tmux server: <code>tmux -L tp ls</code> (the <code>tp</code> socket). It doesn't interfere with your tmux.</p>
+<h3>The mouse doesn't select text</h3>
+<p>Inside tmux (with mouse mode on), dragging copies through tmux. For the terminal's native selection, hold <kbd>Shift</kbd> while dragging.</p>
+<h3>An agent doesn't show up in the agents panel</h3>
+<p>Sessions and subagents come from Claude Code hooks. Run <code>devraid install</code> and restart Claude Code. Codex and Aider only show up as panes.</p>
+<h3>An agent says “command not found”</h3>
+<p>Agents start in an interactive login shell, so anything on the <code>PATH</code> of your normal terminal should be found. If it still isn't, make sure the CLI's folder is added to <code>PATH</code> in your shell's login files (for example <code>~/.profile</code> or <code>~/.zprofile</code>), or put the full path in the preset's command.</p>
+<h3>I can't type Ctrl+D in the shell</h3>
+<p>It's the app's actions shortcut. Use <code>exit</code> or change the shortcut in Settings → Shortcuts.</p>
+<h3>The agent didn't open in a worktree</h3>
+<p>The repository needs at least one commit. The error message says why; the agent is never opened without isolation.</p>
+
+<h2 id="development">Development</h2>
+<p>The code is plain Python, no build step: <code>bin/devraid</code> (entry point), <code>bin/devraid-gui</code> (the interface), <code>bin/raidpoint</code> (CLI, hooks and MCP) and <code>raidpoint/core.py</code> (shared core).</p>
+<ul>
+<li>To test without touching your real setup: <code>RAIDPOINT_HOME=/tmp/x RAIDPOINT_SOCKET=test RAIDPOINT_APPID=dev.raidpoint.Test python3 bin/devraid-gui</code></li>
+<li>tmux session names replace <code>.</code> and <code>:</code> with <code>_</code>, and targets use <code>=name:</code> (exact match, not prefix match).</li>
+<li>If <code>projects.json</code> is unreadable, the app refuses to overwrite it.</li>
+</ul>
+<p>Issues and pull requests are welcome at <a href="https://github.com/kleber-code/dev-raid">github.com/kleber-code/dev-raid</a>. MIT license.</p>
+</article>
+</div>
+
+<footer><div class="shell">
+  /dev/raid · MIT · made by <a href="https://github.com/kleber-code">kleber-code</a> ·
+  <a href="https://github.com/kleber-code/dev-raid">source code</a> · a <a href="https://www.satela.com.br">Satela</a> project
+</div></footer>
+</body>
+</html>

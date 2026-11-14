@@ -1,9 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=/dev/raid
-GenericName=Orquestrador de agentes de IA
-Comment=Orquestre vários agentes de IA em terminais persistentes, um conjunto por projeto
-Comment[en]=Orchestrate many AI coding agents in persistent terminals, one workspace per project
+GenericName=AI agent orchestrator
+Comment=Orchestrate many AI coding agents in persistent terminals, one workspace per project
 Exec=@BIN@/devraid
 Icon=devraid
 Terminal=false
