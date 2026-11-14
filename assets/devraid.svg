@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2a3e"/><stop offset="1" stop-color="#14141f"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="53.5" fill="none" stroke="#45475a" stroke-opacity=".6"/>
+  <!-- três painéis empilhados: o "raid" -->
+  <rect x="44" y="60"  width="168" height="38" rx="11" fill="#cba6f7"/>
+  <rect x="44" y="109" width="168" height="38" rx="11" fill="#89b4fa"/>
+  <rect x="44" y="158" width="168" height="38" rx="11" fill="#a6e3a1"/>
+  <!-- prompt na barra de cima: > _ -->
+  <path d="M62 71 l14 8 -14 8" fill="none" stroke="#1e1e2e" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="86" y="84" width="20" height="6" rx="3" fill="#1e1e2e"/>
+  <!-- LEDs de atividade -->
+  <circle cx="190" cy="79"  r="6" fill="#1e1e2e"/>
+  <circle cx="190" cy="128" r="6" fill="#1e1e2e"/>
+  <circle cx="190" cy="177" r="6" fill="#1e1e2e"/>
+  <!-- a barra "/" de /dev -->
+  <path d="M168 34 L116 222" stroke="#f5e0dc" stroke-width="11" stroke-linecap="round" opacity=".95"/>
+</svg>

@@ -23,7 +23,9 @@ TMUX = ["tmux", "-L", SOCKET, "-f", str(CFG / "tmux.conf")]
 PROJ = CFG / "projects.json"
 
 CONFIG_DEFAULT = {
-    "terminal": {"font": "Noto Sans Mono 11", "zoom_step": 0.1, "theme": "Catppuccin Mocha"},
+    "terminal": {"font": "Noto Sans Mono 11", "zoom_step": 0.1, "theme": "Catppuccin Mocha",
+                 "accent": "Padrão do tema", "cursor": "Bloco", "cursor_blink": False},
+    "window": {"sidebar_width": 190},
     # formato GTK: "<Control>d", "<Control><Shift>p"…  ("" desativa)
     "keys": {
         "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
@@ -43,6 +45,43 @@ THEMES = {   # fundo, texto, 16 cores
     "Nord": ("#2e3440", "#d8dee9", "#3b4252 #bf616a #a3be8c #ebcb8b #81a1c1 #b48ead #88c0d0 #e5e9f0 "
                                    "#4c566a #bf616a #a3be8c #ebcb8b #81a1c1 #b48ead #8fbcbb #eceff4"),
 }
+
+# cores da INTERFACE por tema (o terminal usa THEMES). Chaves: fundo, painel, borda-escura, linhas, cinza, texto, destaque, ...
+THEME_UI = {
+    "Catppuccin Mocha": dict(bg="#1e1e2e", mantle="#181825", crust="#11111b", s0="#313244", s1="#45475a", overlay="#6c7086",
+                             text="#cdd6f4", accent="#cba6f7", green="#a6e3a1", red="#f38ba8", yellow="#f9e2af", blue="#89b4fa"),
+    "Tokyo Night":      dict(bg="#1a1b26", mantle="#16161e", crust="#101014", s0="#292e42", s1="#3b4261", overlay="#565f89",
+                             text="#c0caf5", accent="#bb9af7", green="#9ece6a", red="#f7768e", yellow="#e0af68", blue="#7aa2f7"),
+    "Gruvbox Dark":     dict(bg="#282828", mantle="#1d2021", crust="#171717", s0="#3c3836", s1="#504945", overlay="#7c6f64",
+                             text="#ebdbb2", accent="#d3869b", green="#b8bb26", red="#fb4934", yellow="#fabd2f", blue="#83a598"),
+    "Nord":             dict(bg="#2e3440", mantle="#272c36", crust="#20242d", s0="#3b4252", s1="#434c5e", overlay="#616e88",
+                             text="#d8dee9", accent="#b48ead", green="#a3be8c", red="#bf616a", yellow="#ebcb8b", blue="#81a1c1"),
+}
+ACCENTS = {"Padrão do tema": None, "Azul": "blue", "Verde": "green", "Amarelo": "yellow", "Vermelho": "red"}
+CURSORES = ["Bloco", "Barra", "Sublinhado"]
+
+def _mix(a, b, t):
+    """mistura duas cores #rrggbb: t=0 -> a, t=1 -> b"""
+    x = [int(a[i:i + 2], 16) for i in (1, 3, 5)]; y = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(p + (q - p) * t):02x}" for p, q in zip(x, y))
+
+def ui_colors(term_cfg):
+    """paleta da interface para o tema e a cor de destaque escolhidos"""
+    ui = dict(THEME_UI.get(term_cfg.get("theme"), THEME_UI["Catppuccin Mocha"]))
+    k = ACCENTS.get(term_cfg.get("accent"))
+    if k: ui["accent"] = ui[k]
+    return ui
+
+def css_for(css_base, ui):
+    """reescreve as cores do CSS padrão (Catppuccin) para a paleta `ui`, de uma vez só (sem trocas em cadeia)"""
+    d = THEME_UI["Catppuccin Mocha"]
+    m = {d[k]: ui[k] for k in d}
+    if ui["bg"] != d["bg"]:                              # derivados; no tema padrão ficam como no CSS original
+        m["#a6adc8"] = _mix(ui["text"], ui["bg"], .28)   # texto secundário
+        m["#585b70"] = ui["s1"]
+    if ui["accent"] != d["accent"]:
+        m["#d9bdfa"] = _mix(ui["accent"], "#ffffff", .22)  # destaque em hover
+    return re.sub(r"#[0-9a-fA-F]{6}", lambda mo: m.get(mo.group(0).lower(), mo.group(0)), css_base)
 
 def _toml_val(v):
     if isinstance(v, bool): return "true" if v else "false"
@@ -82,9 +121,21 @@ def save_agents(lst):
     write_json_atomic(CFG / "agents.json", clean or [{"name": "Shell", "cmd": ""}])
 
 
+def _parse_projects(text):
+    """JSON do projects.json; perdoa vírgula sobrando no fim de objeto/lista (erro comum de edição à mão)"""
+    try: return json.loads(text)
+    except json.JSONDecodeError:
+        return json.loads(re.sub(r",(\s*[}\]])", r"\1", text))      # se ainda falhar, levanta o erro original
+
+def projects_error():
+    """None se o projects.json está ok (ou não existe); senão a mensagem de erro"""
+    try: _parse_projects(PROJ.read_text()); return None
+    except FileNotFoundError: return None
+    except Exception as e: return f"{type(e).__name__}: {e}"
+
 def read_projects():
     """conteúdo bruto do projects.json (inclui metadados como _last); {} se faltar ou estiver ilegível (leitores)"""
-    try: return json.loads(PROJ.read_text())
+    try: return _parse_projects(PROJ.read_text())
     except Exception: return {}
 
 def load_projects():
@@ -95,7 +146,7 @@ def update_projects(fn):
     ilegível, NÃO grava (evita apagar a lista inteira por causa de uma leitura ruim)."""
     with open(CFG / "projects.lock", "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
-        try: d = json.loads(PROJ.read_text())
+        try: d = _parse_projects(PROJ.read_text())
         except FileNotFoundError: d = {}
         r = fn(d)
         tmp = PROJ.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=2, ensure_ascii=False))
@@ -260,6 +311,48 @@ def spawn_pane(project, title, cmd="", worktree=False, layout="tiled", cwd=None)
     run_tmux(project, "select-pane", "-t", pid, "-T", title)
     run_tmux(project, "select-layout", "-t", tgt(project), layout)
     return pid, d, None
+
+# ---------------------------------------------------------------- orquestração
+PROMPT_ARG = {"claude", "codex", "gemini", "cursor-agent", "opencode"}   # CLIs que aceitam a tarefa como argumento inicial
+
+def agent_launch_cmd(ag, prompt=""):
+    """(comando, precisa_send_keys). Claude/Codex & cia recebem a tarefa como argumento (confiável);
+    os demais abrem vazios e a tarefa vai por send-keys depois. Preset pode forçar com "prompt": "arg"|"keys"."""
+    cmd = (ag.get("cmd") or "").strip()
+    if not cmd or not prompt: return cmd, False
+    mode = ag.get("prompt")
+    try: first = os.path.basename(shlex.split(cmd)[0])
+    except (ValueError, IndexError): first = ""
+    if mode == "arg" or (mode is None and first in PROMPT_ARG):
+        return f"{cmd} {shlex.quote(prompt)}", False
+    return cmd, True
+
+def run_task(project, prompt, agents, worktree=True, layout="tiled"):
+    """dispara a MESMA tarefa em vários agentes, cada um (opcionalmente) em worktree isolada.
+    agents: lista de nomes de preset (repetir o nome = mais cópias). Devolve [{agent, pane, dir, error}]."""
+    presets = {a["name"].lower(): a for a in agents_cfg()}
+    out = []
+    for nome in agents:
+        ag = presets.get(nome.lower())
+        if not ag or not ag.get("cmd"):
+            out.append({"agent": nome, "pane": None, "dir": None, "error": "preset desconhecido ou sem comando"}); continue
+        cmd, keys = agent_launch_cmd(ag, prompt)
+        pid, d, err = spawn_pane(project, ag["name"], cmd, worktree, layout)
+        if pid and keys:
+            time.sleep(4)
+            run_tmux(project, "send-keys", "-t", pid, "-l", prompt); run_tmux(project, "send-keys", "-t", pid, "Enter")
+        out.append({"agent": ag["name"], "pane": pid, "dir": d, "error": err})
+    return out
+
+ORCHESTRATOR_PROMPT = (
+    "Você é o ORQUESTRADOR deste projeto no /dev/raid. Quando eu te passar uma tarefa: "
+    "1) divida em partes independentes (que não editem os mesmos arquivos); "
+    "2) para cada parte, use a ferramenta MCP `spawn_agent` do servidor `raidpoint` com worktree=true e a instrução "
+    "da parte em `prompt`; escolha o agente (Claude ou Codex) pelo tipo de trabalho e olhe `usage` para não estourar a cota; "
+    "3) acompanhe com `list_agents` e `read_output`, e use `send_message` só para corrigir o rumo; "
+    "4) quando todos terminarem, resuma o que cada um fez e liste as branches agent/* para eu revisar em Ctrl+G. "
+    "NÃO faça merge nem push sozinho. Responda agora apenas confirmando que entendeu e aguarde a minha tarefa."
+)
 
 # ---------------------------------------------------------------- eventos
 def log_event(ev):
@@ -562,6 +655,49 @@ def plan_status():
     d["age_s"] = now - d.get("ts", 0)
     return d
 
+
+_CODEX = {"key": None, "val": None}
+
+def codex_plan(max_files=12):
+    """limites do plano do Codex (5h / semana), créditos e tipo de plano, lidos do último `token_count`
+    com `rate_limits` nos logs ~/.codex/sessions (o Codex grava isso sozinho). None se não houver dados."""
+    from datetime import datetime
+    root = Path.home() / ".codex" / "sessions"
+    try:
+        files = sorted(root.glob("**/rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:max_files]
+    except OSError:
+        return None
+    if not files: return None
+    key = (str(files[0]), files[0].stat().st_mtime)
+    if _CODEX["key"] != key:
+        found = None
+        for f in files:
+            try:
+                with open(f, "rb") as fh:
+                    fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - 600_000)); data = fh.read()
+            except OSError:
+                continue
+            for line in reversed(data.decode("utf-8", "ignore").splitlines()):
+                if '"rate_limits"' not in line or '"token_count"' not in line: continue
+                try: e = json.loads(line)
+                except Exception: continue
+                rl = (e.get("payload") or {}).get("rate_limits")
+                if not rl: continue
+                try: ts = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+                except Exception: ts = f.stat().st_mtime
+                found = {"plan_type": rl.get("plan_type"), "primary": rl.get("primary"), "secondary": rl.get("secondary"),
+                         "credits": rl.get("credits") or {}, "ts": ts, "reached": rl.get("rate_limit_reached_type")}
+                break
+            if found: break
+        _CODEX["key"], _CODEX["val"] = key, found
+    d = _CODEX["val"]
+    if not d: return None
+    d = dict(d); now = time.time()
+    for k in ("primary", "secondary"):                       # janela que já reiniciou = dado vencido
+        w = d.get(k)
+        if w and w.get("resets_at") and w["resets_at"] < now: d[k] = None
+    d["age_s"] = now - d["ts"]
+    return d
 
 # ---------------------------------------------------------------- git: últimos commits e CI (GitHub Actions)
 _GD = {}

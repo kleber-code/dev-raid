@@ -10,11 +10,12 @@
 <meta property="og:image" content="https://kleber-code.github.io/dev-raid/img/og.png">
 <meta name="theme-color" content="#11111b">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="top"><div class="shell">
-  <a class="brand" href="./">/dev/<b>raid</b></a>
+  <a class="brand" href="./"><img src="logo.svg" alt="" width="26" height="26">/dev/<b>raid</b></a>
   <nav>
     <a href="#recursos">Recursos</a>
     <a href="#instalar">Instalar</a>
@@ -26,12 +27,13 @@
 
 <main>
 <section class="hero"><div class="shell">
+  <img class="logo" src="logo.svg" alt="Logo do /dev/raid" width="104" height="104">
   <span class="pill">código aberto · MIT · Linux (GTK4)</span>
   <h1>/dev/<b>raid</b></h1>
   <p class="lede">Um “VS Code de terminais” para <strong>orquestrar vários agentes de IA</strong> em paralelo.
     Um conjunto de terminais por projeto, que <strong>continua vivo</strong> quando você fecha a janela.</p>
   <div class="cta">
-    <a class="btn p" href="#instalar">Instalar</a>
+    <a class="btn p" href="#instalar">Instalar em uma linha</a>
     <a class="btn" href="guia.html">Ler o guia</a>
     <a class="btn" href="https://github.com/kleber-code/dev-raid">Ver no GitHub</a>
   </div>
@@ -50,7 +52,11 @@
     <div class="card"><h3><i>06</i>Memória e segredos por projeto</h3><p>Notas em markdown com busca que entram no contexto das novas sessões. Segredos ficam no chaveiro do sistema: o agente só vê os <em>nomes</em> e você aprova cada uso.</p></div>
     <div class="card"><h3><i>07</i>Servidores remotos</h3><p>Projetos em VPS via <code>mosh</code> ou ssh, direto do seu <code>~/.ssh/config</code>. O tmux roda no servidor — a conexão cai, o trabalho não.</p></div>
     <div class="card"><h3><i>08</i>Servidor MCP embutido</h3><p>Os próprios agentes podem listar projetos, abrir outros agentes, mandar mensagem, ler a saída de um painel e usar memória e segredos.</p></div>
-    <div class="card"><h3><i>09</i>GitHub sem fricção</h3><p>Lista todos os seus repositórios (usuário e orgs) usando o <code>gh</code> que você já tem. Abrir um repo clona e vira projeto.</p></div>
+    <div class="card"><h3><i>09</i>Tarefa em paralelo</h3><p>Escreva a tarefa uma vez e dispare Claude, Codex ou várias cópias do mesmo, cada um na sua worktree. Depois compare os resultados lado a lado.</p></div>
+    <div class="card"><h3><i>10</i>Agente orquestrador</h3><p>Um Claude que divide o objetivo, abre subagentes em worktrees pelo MCP, acompanha o andamento e entrega as branches para você revisar. Sem merge sozinho.</p></div>
+    <div class="card"><h3><i>11</i>Créditos à vista</h3><p>Percentual do plano (5 h e semana) do <strong>Claude</strong> e do <strong>Codex</strong>, saldo de créditos e tokens por projeto — e o orquestrador usa isso para não estourar a cota.</p></div>
+    <div class="card"><h3><i>12</i>Seu visual</h3><p>Temas (Catppuccin, Tokyo Night, Gruvbox, Nord), cor de destaque, fonte, cursor e atalhos — tudo em um painel de Configurações, salvo na hora.</p></div>
+    <div class="card"><h3><i>13</i>GitHub sem fricção</h3><p>Lista todos os seus repositórios (usuário e orgs) usando o <code>gh</code> que você já tem. Abrir um repo clona e vira projeto.</p></div>
   </div>
 </div></section>
 
@@ -76,6 +82,17 @@
   </div>
 </div></section>
 
+<section class="s"><div class="shell">
+  <div class="two">
+    <div class="shot"><img src="img/parallel.webp" width="720" height="560" loading="lazy" alt="Diálogo de tarefa em paralelo: uma tarefa, Claude e Codex marcados, worktree isolada"></div>
+    <div>
+      <h2>Uma tarefa, vários agentes</h2>
+      <p>Escreva uma vez, escolha quem trabalha e dispare. Cada agente recebe a tarefa já na própria worktree e branch; você acompanha tudo no painel de agentes e compara o resultado em Mudanças.</p>
+      <ul><li>Claude e Codex lado a lado, ou três Claudes para comparar abordagens</li><li>Ou deixe um <strong>orquestrador</strong> dividir o trabalho e abrir os subagentes</li><li>Você revisa; nada é mesclado sem a sua decisão</li></ul>
+    </div>
+  </div>
+</div></section>
+
 <section class="s alt"><div class="shell">
   <div class="two">
     <div>
@@ -88,16 +105,13 @@
 </div></section>
 
 <section class="s" id="instalar"><div class="shell">
-  <h2>Instalar</h2>
-  <p class="sub">Linux com GTK4 e VTE (testado no Fedora; pensado para Arch + sway). Precisa de <code>tmux</code>, <code>gh</code> e <code>libsecret</code>.</p>
-  <pre><code>git clone https://github.com/kleber-code/dev-raid.git &amp;&amp; cd dev-raid
-./install.sh        # confere as dependências e instala os comandos
-gh auth login       # o app usa a autenticação do gh
-raidpoint install   # registra hooks e MCP no Claude Code e no Codex
-devraid             # abre o app</code></pre>
-  <p>No Arch: <code>sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring mosh noto-fonts</code><br>
-     No Fedora: <code>sudo dnf install python3-gobject gtk4 vte291-gtk4 tmux gh libsecret mosh</code></p>
-  <p><a class="btn p" href="guia.html">Continuar no guia →</a></p>
+  <h2>Instalar em uma linha</h2>
+  <p class="sub">Linux com GTK4 e VTE. O instalador detecta a distro (Arch, Fedora, Debian/Ubuntu), instala o que faltar (pergunta antes do <code>sudo</code>) e coloca o app em <code>~/.local</code>, sem root.</p>
+  <pre><code>curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
+  <pre><code>wget -qO- https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
+  <p>Depois: <code>gh auth login</code>, <code>devraid install</code> (registra hooks e MCP no Claude Code e no Codex) e <code>devraid</code> para abrir.</p>
+  <p class="fine">Rodar script da internet é confiar nele: <a href="install.sh">leia o install.sh</a> antes, ou fixe uma versão com <code>DEVRAID_REF=v0.2.0</code>. Para remover: <code>… | sh -s -- --uninstall</code>.</p>
+  <p><a class="btn p" href="guia.html#instalacao">Outras formas de instalar →</a> <a class="btn" href="guia.html">Ler o guia</a></p>
 </div></section>
 </main>
 

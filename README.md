@@ -20,6 +20,9 @@ em paralelo, um conjunto de terminais por projeto, que **sobrevive** quando voc�
 - **Layouts claros:** colunas, linhas, grade, principal+lateral. Botão **＋ Agente** abre Claude/Codex/Aider/…
   num novo painel, opcionalmente em um **git worktree isolado** por agente.
 - **Servidores remotos** (`~/.ssh/config`) via **mosh** ou ssh; o tmux roda na VPS.
+- **Tarefa em paralelo e orquestrador:** a mesma tarefa em vários agentes, cada um na sua worktree, ou um Claude
+  que divide o trabalho e abre subagentes pelo MCP. Você revisa em **Mudanças** (`Ctrl+G`); nada é mesclado sozinho.
+- **Créditos:** percentual do plano (5 h e semana) do **Claude** e do **Codex**, saldo de créditos e tokens por projeto.
 - **Painel de agentes** (`Ctrl+J`): painéis, sessões de IA e **subagentes** (via hooks do Claude Code),
   com status; clique abre o transcript.
 - **MCP (`raidpoint mcp`)**: agentes listam/criam/mensageiam outros agentes, leem saída, usam **memória** e
@@ -31,15 +34,22 @@ em paralelo, um conjunto de terminais por projeto, que **sobrevive** quando voc�
 
 ## Instalar
 
+Em uma linha (detecta Arch, Fedora e Debian/Ubuntu, instala o que faltar e coloca o app em `~/.local`, sem root):
+
 ```bash
-git clone https://github.com/kleber-code/dev-raid.git && cd dev-raid
-./install.sh          # lista dependências que faltam (comandos para Arch e Fedora)
-gh auth login         # o app usa a autenticação do gh (nada de OAuth próprio)
-raidpoint install     # registra hooks e MCP no Claude Code / Codex
-devraid               # abre o app
+curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh
+# ou
+wget -qO- https://kleber-code.github.io/dev-raid/install.sh | sh
 ```
 
-Dependências no Arch: `sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring mosh noto-fonts`
+Depois: `gh auth login` (uma vez), `devraid install` (registra hooks e MCP no Claude Code e no Codex) e `devraid` para abrir.
+Rodar script da internet é confiar nele: [leia o install.sh](docs/install.sh) antes ou fixe uma versão com `DEVRAID_REF=v0.2.0`.
+Para remover: `curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh -s -- --uninstall`.
+
+**Pacotes** (em [`packaging/`](packaging)): `PKGBUILD` para o AUR (`devraid` e `devraid-git`) e `devraid.spec` para RPM,
+ambos prontos mas **ainda não publicados**. À mão: `sudo make install PREFIX=/usr/local`.
+
+Dependências: Python 3.11+, GTK4, VTE 3.91 com PyGObject, tmux, `gh`, libsecret; `mosh` é opcional.
 
 ## Atalhos
 
@@ -67,15 +77,15 @@ O botão direito é do /dev/raid (e não do tmux ou do programa dentro do termin
 
 ## Sway
 
-O sway cuida das janelas; o /dev/raid cuida de projetos/agentes. `app_id` = `dev.raidpoint.App`:
+O sway cuida das janelas; o /dev/raid cuida de projetos/agentes. `app_id` = `br.com.satela.DevRaid`:
 
 ```
-for_window [app_id="dev.raidpoint.App"] move to workspace 2
+for_window [app_id="br.com.satela.DevRaid"] move to workspace 2
 ```
 
 ## Nomes internos
 
-O app se chamava Raid Point. Os identificadores internos (comando `raidpoint`, pasta `~/.raid_point`, servidor MCP `raidpoint`, `app_id` `dev.raidpoint.App`) foram mantidos para não quebrar instalações existentes.
+O app se chamava Raid Point. O comando é `devraid` (sem argumentos abre a janela; com um verbo é a CLI: `devraid ls`, `devraid mcp`…) e o `app_id` é `br.com.satela.DevRaid`. O comando antigo `raidpoint`, a pasta `~/.raid_point` e o servidor MCP `raidpoint` foram mantidos para não quebrar instalações existentes.
 
 ## Dados
 
@@ -97,6 +107,6 @@ Tudo em `~/.raid_point/`: `projects.json`, `agents.json` (presets do menu ＋ Ag
 
 ## Desenvolvimento
 
-- `RAIDPOINT_APPID` troca o ID do app (rodar uma 2ª instância de teste); `RAIDPOINT_SHOW=changes|palette|settings` abre uma janela ao iniciar; `RAIDPOINT_HOME` muda a pasta de dados e `RAIDPOINT_SOCKET` o socket do tmux, para testar sem tocar no uso real.
+- `RAIDPOINT_APPID` troca o ID do app (rodar uma 2ª instância de teste); `RAIDPOINT_SHOW=changes|palette|settings|parallel` abre uma janela ao iniciar; `RAIDPOINT_HOME` muda a pasta de dados e `RAIDPOINT_SOCKET` o socket do tmux, para testar sem tocar no uso real.
 - Os nomes de sessão do tmux trocam `.` e `:` por `_` e os alvos usam `=nome:` (casamento exato, não por prefixo).
 - `projects.json` é gravado com trava e de forma atômica; se estiver ilegível, o app se recusa a sobrescrevê-lo.

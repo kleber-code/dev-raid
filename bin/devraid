@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""devraid - ponto de entrada único do /dev/raid.
+
+  devraid                 abre o app (janela)
+  devraid <comando> ...   CLI: ls, add, rm, open, repos, usage, mem, secret, mcp, hook, install, ...
+  devraid --version
+"""
+import os, sys
+
+AQUI = os.path.dirname(os.path.realpath(__file__))
+VERSION = "0.2.0"
+
+def main():
+    a = sys.argv[1:]
+    if a[:1] in (["--version"], ["-V"], ["version"]):
+        print(f"devraid {VERSION}"); return
+    if not a or a[0] in ("gui", "--gui"):
+        alvo = os.path.join(AQUI, "devraid-gui")
+        os.execv(sys.executable, [sys.executable, alvo])
+    alvo = os.path.join(AQUI, "raidpoint")
+    os.execv(sys.executable, [sys.executable, alvo, *a])
+
+if __name__ == "__main__":
+    main()

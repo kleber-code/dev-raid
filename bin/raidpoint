@@ -75,7 +75,9 @@ def t_usage(a):
     S = core.usage_summary()
     return {w: {k: v for k, v in o.items() if k not in ("by_project", "by_model")} | {
         "top_projects": dict(sorted(o["by_project"].items(), key=lambda x: -x[1])[:5])} for w, o in S.items()} | {
-        "note": "novos = entrada + saída + cache criado (tokens); não é o limite do plano"}
+        "claude_plan": {k: v for k, v in (core.plan_status() or {}).items() if k in ("five_hour", "seven_day", "age_s")} or None,
+        "codex_plan": core.codex_plan(),
+        "note": "novos = entrada + saída + cache criado (tokens); claude_plan/codex_plan = % do limite do plano (None sem dados)"}
 
 def t_ci_status(a):
     g = core.git_detail_cached(core.pdir(_proj(a)), ttl=20)
@@ -99,9 +101,10 @@ def t_spawn_agent(a):
     if not ag: raise ValueError(f"agente desconhecido; opções: {[x['name'] for x in core.agents_cfg()]}")
     if not ag["cmd"] and not core.ask_approval("spawn", p, "Abrir um painel de SHELL puro"):
         return {"error": "negado pelo usuário"}
-    pid, d, err = core.spawn_pane(p, ag["name"], ag["cmd"], bool(a.get("worktree")))
+    cmd, keys = core.agent_launch_cmd(ag, a.get("prompt") or "")
+    pid, d, err = core.spawn_pane(p, ag["name"], cmd, bool(a.get("worktree")))
     if not pid: return {"error": err or "não consegui criar o painel (a sessão do projeto está aberta no /dev/raid?)"}
-    if a.get("prompt") and ag["cmd"]:
+    if keys:
         time.sleep(4)
         core.run_tmux(p, "send-keys", "-t", pid, "-l", a["prompt"]); core.run_tmux(p, "send-keys", "-t", pid, "Enter")
     return {"pane": pid, "dir": d, "agent": ag["name"]}
@@ -368,6 +371,14 @@ def main():
                 w = pl.get(k)
                 if w: print(f"plano {nome}: {w.get('used_percentage', 0):.0f}% usado, reseta {time.strftime('%d/%m %H:%M', time.localtime(w['resets_at']))}  (dado de {int(pl['age_s'] // 60)} min atrás)")
         else: print("plano: sem dados (ative com `raidpoint install-statusline`)")
+        cx = core.codex_plan()
+        if cx:
+            for nome, k in (("5h", "primary"), ("semana", "secondary")):
+                w = cx.get(k)
+                if w and w.get("used_percent") is not None:
+                    print(f"codex {nome}: {w['used_percent']:.0f}% usado, reseta {time.strftime('%d/%m %H:%M', time.localtime(w['resets_at']))}  (plano {cx.get('plan_type')}, dado de {core.ago(cx['ts'])} atrás)")
+            cr = cx.get("credits") or {}
+            print("codex créditos:", "ilimitados" if cr.get("unlimited") else (cr.get("balance") if cr.get("has_credits") else "sem créditos extras"))
         print("\npor projeto (7d):")
         for p, n in sorted(S["7d"]["by_project"].items(), key=lambda x: -x[1])[:8]: print(f"  {p:<24} {f(n):>7}")
     elif c == "events":

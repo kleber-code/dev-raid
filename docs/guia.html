@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="top"><div class="shell">
-  <a class="brand" href="./">/dev/<b>raid</b></a>
+  <a class="brand" href="./"><img src="logo.svg" alt="" width="26" height="26">/dev/<b>raid</b></a>
   <nav>
     <a href="./#recursos">Recursos</a>
     <a href="./#instalar">Instalar</a>
@@ -30,6 +30,7 @@
   <a href="#projetos">Projetos e repositórios</a>
   <a href="#paineis">Painéis e layouts</a>
   <a href="#agentes">Agentes e worktrees</a>
+  <a href="#orquestracao">Orquestração</a>
   <a href="#acoes">Ações (Ctrl+D)</a>
   <a href="#mudancas">Mudanças e commit</a>
   <a href="#painel-agentes">Painel de agentes</a>
@@ -72,15 +73,37 @@ sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring 
 
 # Fedora
 sudo dnf install python3-gobject gtk4 vte291-gtk4 tmux gh libsecret mosh</code></pre>
-<h3>Instalar o app</h3>
+<h3>Instalar em uma linha</h3>
+<p>O jeito mais rápido. Detecta a sua distro (Arch, Fedora, Debian/Ubuntu), instala as dependências que faltarem (pergunta antes de usar o <code>sudo</code>) e instala o /dev/raid em <code>~/.local</code>, sem root:</p>
+<pre><code>curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
+<p>ou, com <code>wget</code>:</p>
+<pre><code>wget -qO- https://kleber-code.github.io/dev-raid/install.sh | sh</code></pre>
+<p>Depois:</p>
+<pre><code>gh auth login        # uma vez
+devraid install      # registra hooks e MCP no Claude Code e no Codex
+devraid              # abre o app</code></pre>
+<div class="note warn"><p><strong>Rodar um script da internet é confiar nele.</strong> Leia antes com <code>curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | less</code> (são ~120 linhas) ou fixe uma versão: <code>curl -fsSL …/install.sh | DEVRAID_REF=v0.2.0 sh</code>.</p></div>
+<table>
+<tr><th>Variável / opção</th><th>Efeito</th></tr>
+<tr><td><code>DEVRAID_REF=v0.2.0</code></td><td>instala essa versão (tag ou branch). Sem isso: a última release; sem release, a <code>main</code></td></tr>
+<tr><td><code>DEVRAID_PREFIX=/usr/local</code></td><td>onde instalar (padrão <code>~/.local</code>; fora dele precisa de <code>sudo</code>)</td></tr>
+<tr><td><code>DEVRAID_YES=1</code></td><td>não perguntar antes de instalar dependências do sistema</td></tr>
+<tr><td><code>sh -s -- --uninstall</code></td><td>remove o /dev/raid (seus dados em <code>~/.raid_point</code> ficam)</td></tr>
+</table>
+<h3>Pacotes</h3>
+<table>
+<tr><th>Onde</th><th>Situação</th></tr>
+<tr><td>Arch / AUR</td><td><code>PKGBUILD</code> (e <code>devraid-git</code>) prontos em <code>packaging/aur/</code>. <strong>Ainda não publicados</strong> no AUR. Enquanto isso: <code>git clone</code> + <code>makepkg -si</code> dentro de <code>packaging/aur</code>, ou a instalação em uma linha.</td></tr>
+<tr><td>Fedora / RPM</td><td><code>devraid.spec</code> em <code>packaging/rpm/</code> (construído e testado). Ainda sem repositório (COPR).</td></tr>
+<tr><td>pip / Flatpak</td><td>não oferecidos: o app precisa do tmux, do <code>gh</code> e do chaveiro do sistema, que um pacote isolado não enxerga.</td></tr>
+</table>
+<h3>Instalar à mão</h3>
 <pre><code>git clone https://github.com/kleber-code/dev-raid.git
 cd dev-raid
-./install.sh          # confere dependências, cria os comandos e a entrada no menu
-gh auth login         # uma vez
-raidpoint install     # registra hooks e MCP no Claude Code e no Codex
-devraid               # abre o app</code></pre>
-<p>O <code>install.sh</code> cria os links <code>devraid</code> (o app), <code>raidpoint</code> (a CLI) e uma entrada no menu de aplicativos. Os dados ficam em <code>~/.raid_point/</code>.</p>
-<div class="note"><p><strong>Por que “raidpoint” nos comandos?</strong> O app se chamava Raid Point. Os nomes internos (comando <code>raidpoint</code>, pasta <code>~/.raid_point</code>, servidor MCP <code>raidpoint</code>) foram mantidos de propósito para não quebrar instalações e configurações existentes.</p></div>
+sudo make install PREFIX=/usr/local     # ou: make install PREFIX=$HOME/.local
+make uninstall PREFIX=/usr/local</code></pre>
+<p>Isso copia tudo para <code>PREFIX/lib/devraid</code> e cria <code>devraid</code> e <code>raidpoint</code> em <code>PREFIX/bin</code>, o ícone e a entrada de menu. Para desenvolver, rode direto do clone: <code>python3 bin/devraid</code>.</p>
+<div class="note"><p><strong>Nomes.</strong> O app é o <code>devraid</code>: sem argumentos abre a janela, e com um verbo é a linha de comando (<code>devraid ls</code>, <code>devraid mcp</code>…). O comando <code>raidpoint</code> continua existindo como atalho antigo. A pasta de dados <code>~/.raid_point</code> e o servidor MCP <code>raidpoint</code> mantêm o nome de propósito, para não quebrar instalações e configurações existentes.</p></div>
 
 <h2 id="primeiros-passos">Primeiros passos</h2>
 <ol>
@@ -138,6 +161,30 @@ devraid               # abre o app</code></pre>
 </ul>
 <p>Assim dois agentes editam o mesmo projeto sem conflito, e você revisa e junta cada branch depois. Se a worktree não puder ser criada (por exemplo, repositório sem nenhum commit), o /dev/raid <strong>não abre o agente sem isolamento</strong>: mostra o erro em vez de rodar no diretório principal por engano.</p>
 
+<h2 id="orquestracao">Orquestração</h2>
+<p>Há três níveis, do mais manual ao mais automático.</p>
+<h3>1. Tarefa em paralelo</h3>
+<p>Na paleta (<kbd>Ctrl</kbd>+<kbd>D</kbd>) escolha <em>Orquestrar: tarefa em paralelo…</em>. Escreva a tarefa uma vez, diga quantas cópias de cada agente quer e dispare. Cada agente abre na sua própria worktree com a tarefa já entregue; depois você compara os resultados em <a href="#mudancas">Mudanças</a>.</p>
+<img src="img/parallel.webp" width="720" height="560" loading="lazy" alt="Diálogo Tarefa em paralelo com uma tarefa escrita, 1 cópia de Claude, 1 de Codex e a opção de worktree marcada">
+<ul>
+<li>Várias cópias do <em>mesmo</em> agente servem para comparar abordagens (“três Claudes, escolho o melhor”).</li>
+<li>Claude, Codex, Gemini e similares recebem a tarefa como argumento de inicialização (confiável). Os outros abrem vazios e a tarefa é digitada neles.</li>
+<li>Se alguma worktree falhar (por exemplo, repositório sem commits), aquele agente <strong>não é aberto</strong> e o erro é listado; os outros seguem.</li>
+<li><kbd>Ctrl</kbd>+<kbd>Enter</kbd> dispara; <kbd>Esc</kbd> cancela.</li>
+</ul>
+<h3>2. Agente orquestrador</h3>
+<p><em>Orquestrar: abrir agente orquestrador</em> abre um Claude já instruído a ser o coordenador. Você descreve o objetivo e ele, sozinho:</p>
+<ol>
+<li>divide o trabalho em partes independentes;</li>
+<li>abre um agente por parte, em worktrees, pelo servidor MCP (<code>spawn_agent</code> com <code>prompt</code>), escolhendo Claude ou Codex e olhando <code>usage</code> para não estourar a sua cota;</li>
+<li>acompanha com <code>list_agents</code> e <code>read_output</code>;</li>
+<li>no fim resume o que cada um fez e lista as branches <code>agent/*</code> para você revisar.</li>
+</ol>
+<p>Ele <strong>não faz merge nem push sozinho</strong>. Requer o MCP registrado (<code>devraid install</code>).</p>
+<h3>3. Subagentes do próprio Claude Code</h3>
+<p>O Claude Code já cria subagentes por conta própria. O painel de agentes mostra cada um com status (via hooks) e o transcript ao clicar. Vale para qualquer sessão, orquestrada ou não.</p>
+<div class="note"><p>As três formas deixam tudo visível nos seus painéis: você sempre vê quem está rodando, em qual pasta e em qual branch.</p></div>
+
 <h2 id="acoes">Ações (Ctrl+D)</h2>
 <p>A paleta de ações é a forma mais rápida de fazer qualquer coisa. Digite parte do nome (sem se preocupar com acentos), use ↑ ↓ e <kbd>Enter</kbd>. <kbd>Esc</kbd> fecha.</p>
 <img src="img/palette.webp" width="560" height="420" loading="lazy" alt="Paleta de ações filtrada por agente">
@@ -173,7 +220,7 @@ devraid               # abre o app</code></pre>
 <li><strong>CI / Actions</strong> do GitHub para a branch.</li>
 <li><strong>Memória</strong> recente do projeto.</li>
 </ul>
-<p>As sessões e subagentes vêm dos <em>hooks</em> do Claude Code (instalados por <code>raidpoint install</code>). O Codex e o Aider não emitem esses eventos, então aparecem só como painéis.</p>
+<p>As sessões e subagentes vêm dos <em>hooks</em> do Claude Code (instalados por <code>devraid install</code>). O Codex e o Aider não emitem esses eventos, então aparecem só como painéis.</p>
 <p>Quando um agente fica esperando por você, a barra lateral mostra o selo <code>!</code> e o app envia uma notificação do sistema; clicar nela abre o projeto.</p>
 
 <h2 id="remoto">Servidores remotos</h2>
@@ -193,18 +240,28 @@ devraid               # abre o app</code></pre>
 <h2 id="uso">Uso do plano</h2>
 <p>O botão <strong>◔ uso</strong> do cabeçalho resume o consumo do Claude Code: tokens nas últimas 5 horas, 24 horas e 7 dias, por projeto e modelo, lidos dos transcripts locais.</p>
 <p>Para ver o <strong>percentual real do plano</strong> (os mesmos 5h e semana que o Claude mostra), ative o statusLine:</p>
-<pre><code>raidpoint install-statusline</code></pre>
+<pre><code>devraid install-statusline</code></pre>
 <p>Ele só se instala se você ainda não tiver um statusLine configurado. O app avisa quando um limite está perto de estourar.</p>
+<h3>Codex</h3>
+<p>O Codex grava o próprio limite nos logs (<code>~/.codex/sessions</code>), então não precisa configurar nada. O painel mostra o <strong>percentual de 5 horas e da semana</strong>, quando reseta, o tipo de plano e o <strong>saldo de créditos</strong> (se a conta tiver). O botão do cabeçalho vira, por exemplo, <code>◔ 5h 12% · cx 5%</code>. Os dados são do último uso do Codex: se faz tempo que você não o usa, a janela já reiniciou e ele não aparece.</p>
+<p>A CLI mostra o mesmo: <code>devraid usage</code>. O MCP expõe <code>claude_plan</code> e <code>codex_plan</code> na ferramenta <code>usage</code>, para o orquestrador decidir quantos agentes disparar.</p>
 
 <h2 id="configuracoes">Configurações</h2>
 <p><kbd>Ctrl</kbd>+<kbd>,</kbd> ou o botão ⚙ no cabeçalho. Tudo é salvo na hora, sem botão “salvar”.</p>
-<img src="img/settings.webp" width="900" height="600" loading="lazy" alt="Painel de configurações, página Terminal">
+<img src="img/settings.webp" width="1100" height="440" loading="lazy" alt="Painel de configurações, página Terminal, com busca de fonte monoespaçada">
 <h3>Terminal</h3>
 <ul>
-<li><strong>Fonte</strong> — escolha uma fonte monoespaçada.</li>
-<li><strong>Tamanho (zoom %)</strong> — de 50% a 300%. Também: <kbd>Ctrl</kbd>+<kbd>+</kbd>, <kbd>Ctrl</kbd>+<kbd>−</kbd>, <kbd>Ctrl</kbd>+<kbd>0</kbd> e <kbd>Ctrl</kbd>+roda do mouse.</li>
+<li><strong>Fonte</strong> — lista só as fontes monoespaçadas instaladas, com busca. Uma amostra mostra a escolhida.</li>
+<li><strong>Tamanho da fonte</strong> (pt) e <strong>zoom</strong> (50% a 300%, também por <kbd>Ctrl</kbd>+<kbd>+</kbd>, <kbd>Ctrl</kbd>+<kbd>−</kbd>, <kbd>Ctrl</kbd>+<kbd>0</kbd> e <kbd>Ctrl</kbd>+roda).</li>
 <li><strong>Passo do zoom</strong> — quanto cada <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>−</kbd> muda.</li>
-<li><strong>Tema de cores</strong> — Catppuccin Mocha, Tokyo Night, Gruvbox Dark ou Nord.</li>
+</ul>
+<h3>Aparência</h3>
+<img src="img/appearance.webp" width="1100" height="299" loading="lazy" alt="Página Aparência: tema, cor de destaque, cursor e largura da lista">
+<ul>
+<li><strong>Tema de cores</strong> — Catppuccin Mocha, Tokyo Night, Gruvbox Dark ou Nord. Muda a interface inteira, o terminal e as bordas e abas do tmux.</li>
+<li><strong>Cor de destaque</strong> — padrão do tema, azul, verde, amarelo ou vermelho.</li>
+<li><strong>Cursor</strong> — bloco, barra ou sublinhado, piscando ou não.</li>
+<li><strong>Largura da lista de projetos</strong> — de 140 a 360 px.</li>
 </ul>
 <h3>Atalhos</h3>
 <p>Clique no atalho e aperte a nova combinação. <kbd>Backspace</kbd> remove o atalho, <kbd>Esc</kbd> cancela. Se a combinação já pertence a outra ação, o app avisa em vez de sobrescrever. Os atalhos fixos do tmux aparecem logo abaixo, só para consulta.</p>
@@ -218,6 +275,12 @@ devraid               # abre o app</code></pre>
 font = "Noto Sans Mono 11"
 zoom_step = 0.1
 theme = "Catppuccin Mocha"
+accent = "Padrão do tema"
+cursor = "Bloco"
+cursor_blink = false
+
+[window]
+sidebar_width = 190
 
 [keys]            # formato GTK; "" desativa
 palette = "&lt;Control&gt;d"
@@ -249,13 +312,13 @@ paste = "&lt;Control&gt;&lt;Shift&gt;v"</code></pre>
 <div class="note"><p>Os atalhos do tmux usam <kbd>Alt</kbd> de propósito, para não roubar teclas do shell e dos agentes (<kbd>Ctrl</kbd>+<kbd>…</kbd> é deles). Evitamos <kbd>Alt</kbd>+<kbd>Enter</kbd> e <kbd>Alt</kbd>+<kbd>b</kbd>/<kbd>f</kbd> porque o Claude Code e o readline os usam.</p></div>
 
 <h2 id="sway">Sway / i3</h2>
-<p>O gerenciador de janelas cuida das janelas; o /dev/raid cuida de projetos e agentes. O <code>app_id</code> do app é <code>dev.raidpoint.App</code>:</p>
+<p>O gerenciador de janelas cuida das janelas; o /dev/raid cuida de projetos e agentes. O <code>app_id</code> do app é <code>br.com.satela.DevRaid</code>:</p>
 <pre><code># ~/.config/sway/config
-for_window [app_id="dev.raidpoint.App"] move to workspace 2
-assign [app_id="dev.raidpoint.App"] workspace 2</code></pre>
+for_window [app_id="br.com.satela.DevRaid"] move to workspace 2
+assign [app_id="br.com.satela.DevRaid"] workspace 2</code></pre>
 
 <h2 id="mcp">Servidor MCP</h2>
-<p>O <code>raidpoint mcp</code> é um servidor MCP (stdio) que o <code>raidpoint install</code> registra no Claude Code e no Codex. Com ele, os próprios agentes controlam o ambiente:</p>
+<p>O <code>devraid mcp</code> é um servidor MCP (stdio) que o <code>devraid install</code> registra no Claude Code e no Codex. Com ele, os próprios agentes controlam o ambiente:</p>
 <table>
 <tr><th>Ferramenta</th><th>O que faz</th></tr>
 <tr><td><code>list_projects</code>, <code>list_repos</code>, <code>open_repo</code></td><td>projetos e repositórios do GitHub; clonar e registrar</td></tr>
@@ -269,16 +332,16 @@ assign [app_id="dev.raidpoint.App"] workspace 2</code></pre>
 
 <h2 id="memoria">Memória</h2>
 <p>Cada projeto tem uma memória em arquivos markdown, com busca de texto (SQLite FTS5). Ao iniciar uma sessão do Claude Code, a memória do projeto entra no contexto. Os agentes gravam e consultam pelo MCP; você, pela CLI:</p>
-<pre><code>raidpoint mem add meu-app "decidimos usar sqlite no lugar de postgres"
-raidpoint mem search meu-app sqlite
-raidpoint mem recent meu-app
-raidpoint mem reindex</code></pre>
-<p>O nome do projeto é o segundo argumento (como aparece em <code>raidpoint ls</code>). Só <code>raidpoint mem recent</code>, sem argumentos, descobre o projeto pela pasta em que você está. Veja os <a href="#seguranca">limites de segurança</a>: a memória é lida pelos agentes, então trate o que for gravado nela como não confiável.</p>
+<pre><code>devraid mem add meu-app "decidimos usar sqlite no lugar de postgres"
+devraid mem search meu-app sqlite
+devraid mem recent meu-app
+devraid mem reindex</code></pre>
+<p>O nome do projeto é o segundo argumento (como aparece em <code>devraid ls</code>). Só <code>devraid mem recent</code>, sem argumentos, descobre o projeto pela pasta em que você está. Veja os <a href="#seguranca">limites de segurança</a>: a memória é lida pelos agentes, então trate o que for gravado nela como não confiável.</p>
 
 <h2 id="segredos">Segredos</h2>
 <p>Chaves de API e senhas por projeto, guardadas no <strong>chaveiro do sistema</strong> (libsecret). Os agentes <strong>só veem os nomes</strong>.</p>
 <ol>
-<li>Cadastre pelo menu do projeto (<em>Segredos…</em>) ou pela CLI: <code>raidpoint secret set meu-app STRIPE_KEY</code>.</li>
+<li>Cadastre pelo menu do projeto (<em>Segredos…</em>) ou pela CLI: <code>devraid secret set meu-app STRIPE_KEY</code>.</li>
 <li>O agente pede para rodar um comando usando o segredo (<code>run_with_secrets</code>).</li>
 <li>O app mostra um <strong>diálogo de aprovação</strong> com o comando e o projeto.</li>
 <li>Se você aprovar, o valor entra <strong>só no ambiente daquele comando</strong>, e a saída volta com o valor mascarado.</li>
@@ -296,20 +359,22 @@ raidpoint mem reindex</code></pre>
 </ul>
 
 <h2 id="cli">Linha de comando</h2>
+<p>Tudo é <code>devraid &lt;comando&gt;</code> (o antigo <code>raidpoint &lt;comando&gt;</code> funciona igual).</p>
 <table>
 <tr><th>Comando</th><th>O que faz</th></tr>
 <tr><td><code>devraid</code></td><td>abre o app</td></tr>
-<tr><td><code>raidpoint ls</code></td><td>lista os projetos</td></tr>
-<tr><td><code>raidpoint add &lt;nome&gt; [dir]</code></td><td>registra um projeto (precisa ser git)</td></tr>
-<tr><td><code>raidpoint rm &lt;nome&gt;</code></td><td>tira o projeto da lista (não encerra a sessão nem apaga a pasta)</td></tr>
-<tr><td><code>raidpoint open &lt;projeto&gt;</code></td><td>abre/volta ao projeto no terminal (tmux)</td></tr>
-<tr><td><code>raidpoint kill &lt;nome&gt;</code> / <code>stop</code></td><td>encerra a sessão tmux de um projeto / o servidor tmux inteiro</td></tr>
-<tr><td><code>raidpoint repos</code> / <code>open-repo &lt;dono/repo&gt;</code></td><td>repositórios do GitHub; clonar e registrar</td></tr>
-<tr><td><code>raidpoint mem …</code> / <code>secret …</code></td><td>memória e segredos</td></tr>
-<tr><td><code>raidpoint usage</code></td><td>uso de tokens (5h / 24h / 7d, por projeto)</td></tr>
-<tr><td><code>raidpoint events</code> / <code>transcript &lt;arq&gt; [-f]</code></td><td>últimos eventos dos agentes; ver um transcript</td></tr>
-<tr><td><code>raidpoint install</code></td><td>registra hooks e MCP no Claude Code e no Codex (faz backup antes)</td></tr>
-<tr><td><code>raidpoint install-statusline</code></td><td>ativa o statusLine para ver o % do plano</td></tr>
+<tr><td><code>devraid --version</code></td><td>mostra a versão</td></tr>
+<tr><td><code>devraid ls</code></td><td>lista os projetos</td></tr>
+<tr><td><code>devraid add &lt;nome&gt; [dir]</code></td><td>registra um projeto (precisa ser git)</td></tr>
+<tr><td><code>devraid rm &lt;nome&gt;</code></td><td>tira o projeto da lista (não encerra a sessão nem apaga a pasta)</td></tr>
+<tr><td><code>devraid open &lt;projeto&gt;</code></td><td>abre/volta ao projeto no terminal (tmux)</td></tr>
+<tr><td><code>devraid kill &lt;nome&gt;</code> / <code>stop</code></td><td>encerra a sessão tmux de um projeto / o servidor tmux inteiro</td></tr>
+<tr><td><code>devraid repos</code> / <code>open-repo &lt;dono/repo&gt;</code></td><td>repositórios do GitHub; clonar e registrar</td></tr>
+<tr><td><code>devraid mem …</code> / <code>secret …</code></td><td>memória e segredos</td></tr>
+<tr><td><code>devraid usage</code></td><td>uso de tokens (5h / 24h / 7d, por projeto)</td></tr>
+<tr><td><code>devraid events</code> / <code>transcript &lt;arq&gt; [-f]</code></td><td>últimos eventos dos agentes; ver um transcript</td></tr>
+<tr><td><code>devraid install</code></td><td>registra hooks e MCP no Claude Code e no Codex (faz backup antes)</td></tr>
+<tr><td><code>devraid install-statusline</code></td><td>ativa o statusLine para ver o % do plano</td></tr>
 </table>
 
 <h2 id="arquivos">Arquivos e variáveis</h2>
@@ -328,7 +393,7 @@ raidpoint mem reindex</code></pre>
 <tr><td><code>RAIDPOINT_SOCKET</code></td><td>nome do socket do tmux (padrão <code>tp</code>)</td></tr>
 <tr><td><code>RAIDPOINT_APPID</code></td><td>troca o ID do app (rodar uma 2ª instância)</td></tr>
 <tr><td><code>RAIDPOINT_OPEN</code></td><td>projeto a abrir ao iniciar</td></tr>
-<tr><td><code>RAIDPOINT_SHOW</code></td><td><code>changes</code>, <code>palette</code> ou <code>settings</code>: abre essa janela ao iniciar</td></tr>
+<tr><td><code>RAIDPOINT_SHOW</code></td><td><code>changes</code>, <code>palette</code>, <code>settings</code> ou <code>parallel</code>: abre essa janela ao iniciar</td></tr>
 </table>
 
 <h2 id="problemas">Solução de problemas</h2>
@@ -339,16 +404,16 @@ raidpoint mem reindex</code></pre>
 <h3>O mouse não seleciona texto</h3>
 <p>Dentro do tmux (mouse ligado), arrastar copia pelo tmux. Para a seleção nativa do terminal, segure <kbd>Shift</kbd> enquanto arrasta.</p>
 <h3>Um agente não aparece no painel de agentes</h3>
-<p>Sessões e subagentes vêm dos hooks do Claude Code. Rode <code>raidpoint install</code> e reinicie o Claude Code. Codex e Aider aparecem só como painéis.</p>
+<p>Sessões e subagentes vêm dos hooks do Claude Code. Rode <code>devraid install</code> e reinicie o Claude Code. Codex e Aider aparecem só como painéis.</p>
 <h3>Não consigo digitar Ctrl+D no shell</h3>
 <p>É o atalho de ações do app. Use <code>exit</code> ou troque o atalho em Configurações → Atalhos.</p>
 <h3>O agente não abriu com worktree</h3>
 <p>O repositório precisa ter pelo menos um commit. A mensagem de erro diz o motivo; o agente não é aberto sem isolamento.</p>
 
 <h2 id="desenvolvimento">Desenvolvimento</h2>
-<p>O código é Python puro, sem build: <code>bin/raid-point</code> (a interface), <code>bin/raidpoint</code> (CLI, hooks e MCP) e <code>raidpoint/core.py</code> (núcleo compartilhado).</p>
+<p>O código é Python puro, sem build: <code>bin/devraid</code> (ponto de entrada), <code>bin/devraid-gui</code> (a interface), <code>bin/raidpoint</code> (CLI, hooks e MCP) e <code>raidpoint/core.py</code> (núcleo compartilhado).</p>
 <ul>
-<li>Para testar sem tocar no uso real: <code>RAIDPOINT_HOME=/tmp/x RAIDPOINT_SOCKET=teste RAIDPOINT_APPID=dev.raidpoint.Teste python3 bin/raid-point</code></li>
+<li>Para testar sem tocar no uso real: <code>RAIDPOINT_HOME=/tmp/x RAIDPOINT_SOCKET=teste RAIDPOINT_APPID=dev.raidpoint.Teste python3 bin/devraid-gui</code></li>
 <li>Os nomes das sessões do tmux trocam <code>.</code> e <code>:</code> por <code>_</code>, e os alvos usam <code>=nome:</code> (casamento exato, não por prefixo).</li>
 <li>Se o <code>projects.json</code> estiver ilegível, o app se recusa a sobrescrevê-lo.</li>
 </ul>

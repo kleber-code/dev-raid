@@ -114,7 +114,7 @@ def git_summary(d, pr_cache, key):
 
 class App(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id=os.environ.get("RAIDPOINT_APPID", "dev.raidpoint.App"))
+        super().__init__(application_id=os.environ.get("RAIDPOINT_APPID", "br.com.satela.DevRaid"))
         self.terms, self.rows, self.cur = {}, {}, None
         self.cfg = core.load_config()
         self.rebuild_binds()
@@ -126,9 +126,10 @@ class App(Gtk.Application):
         if getattr(self, "win", None):          # app já aberto: só traz a janela (não duplica janela e temporizadores)
             self.win.present(); return
         Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
-        css = Gtk.CssProvider(); css.load_from_string(CSS)
+        self.css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            Gdk.Display.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.apply_ui_theme()
 
         self.win = Gtk.ApplicationWindow(application=self, default_width=1150, default_height=720)
 
@@ -170,7 +171,7 @@ class App(Gtk.Application):
         self.win.set_titlebar(hb)
 
         # --- sidebar (largura fixa, não expande)
-        self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, width_request=190, hexpand=False)
+        self.side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, width_request=int(self.cfg.get("window", {}).get("sidebar_width", 190)), hexpand=False)
         self.side.add_css_class("side")
         t = Gtk.Label(label="PROJETOS", xalign=0, margin_start=16, margin_top=14, margin_bottom=8)
         t.add_css_class("side-titulo")
@@ -249,7 +250,7 @@ class App(Gtk.Application):
         self.add_action(a3); self.apply_accels()
         mostrar = os.environ.get("RAIDPOINT_SHOW")      # só para desenvolvimento/capturas: changes | palette | settings
         if mostrar:
-            fn = {"changes": self.on_changes, "settings": self.on_settings,
+            fn = {"changes": self.on_changes, "settings": self.on_settings, "parallel": self.on_parallel,
                   "palette": lambda: self.palette(os.environ.get("RAIDPOINT_PALETTE_Q", ""))}.get(mostrar)
             if fn: GLib.timeout_add(1500, lambda: (fn(), False)[1])
         if os.environ.get("RAIDPOINT_AGENTS"): self.rev.set_reveal_child(True)
@@ -275,6 +276,29 @@ class App(Gtk.Application):
 
     def toggle_side(self):
         self.side.set_visible(not self.side.get_visible())
+
+    def apply_ui_theme(self):
+        """cores da interface (tema + destaque) e do tmux (bordas/abas); vale na hora"""
+        ui = core.ui_colors(self.cfg["terminal"])
+        self.css.load_from_string(core.css_for(CSS, ui))
+        self.apply_tmux_theme()
+
+    def apply_tmux_theme(self):
+        ui = core.ui_colors(self.cfg["terminal"])
+        def tmux_work():
+            T = core.TMUX
+            for opt, val in (("status-style", f"bg={ui['mantle']},fg={ui['overlay']}"), ("pane-border-style", f"fg={ui['s0']}"),
+                             ("pane-active-border-style", f"fg={ui['accent']}"), ("message-style", f"bg={ui['s0']},fg={ui['text']}"),
+                             ("window-status-current-format", f"#[bg={ui['bg']},fg={ui['accent']},bold]  #I  #W  "),
+                             ("pane-border-format", f"#{{?pane_synchronized,#[fg={ui['yellow']}] ⇄ ,}}#[fg={ui['accent']},bold] "
+                                                    "#{?#{==:#{pane_title},#{host}},Shell,#{pane_title}} ")):
+                subprocess.run(T + ["set-option", "-g", opt, val], capture_output=True)
+        threading.Thread(target=tmux_work, daemon=True).start()
+
+    def apply_term_opts(self, term):
+        t = self.cfg["terminal"]
+        term.set_cursor_shape({"Barra": Vte.CursorShape.IBEAM, "Sublinhado": Vte.CursorShape.UNDERLINE}.get(t.get("cursor"), Vte.CursorShape.BLOCK))
+        term.set_cursor_blink_mode(Vte.CursorBlinkMode.ON if t.get("cursor_blink") else Vte.CursorBlinkMode.OFF)
 
     def rebuild_binds(self):
         self.binds = {}
@@ -313,7 +337,17 @@ class App(Gtk.Application):
         av.add_css_class(cls)
         return av
 
+    def aviso_projetos(self):
+        err = core.projects_error()
+        if err and not getattr(self, "_err_proj", False):
+            self._err_proj = True
+            Gtk.AlertDialog(message="Não consegui ler a lista de projetos",
+                            detail=f"{core.PROJ}\n\n{err}\n\nSeus projetos NÃO foram apagados: o arquivo só está com erro de formato. "
+                                   "Corrija o JSON (ou restaure um backup) e reabra o app. Enquanto isso o app não grava nada nele.").show(self.win)
+        elif not err: self._err_proj = False
+
     def refresh_list(self):
+        self.aviso_projetos()
         while (r := self.list.get_first_child()): self.list.remove(r)
         self.rows = {}; self.badges = {}; on = alive(); db = load()
         for n in self.names():
@@ -347,7 +381,7 @@ class App(Gtk.Application):
             term.set_scrollback_lines(0)
             term.set_font(Pango.FontDescription(self.cfg['terminal']['font'])); term.set_font_scale(self.zoom)
             self.apply_theme(term)
-            term.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
+            self.apply_term_opts(term)
             self.setup_term_extras(term, name)
             kc = Gtk.EventControllerKey(); kc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
             kc.connect("key-pressed", lambda c, kv, kcode, st, n=name: self.on_term_key(n, kv, st))
@@ -371,6 +405,7 @@ class App(Gtk.Application):
         if name in self.rows: self.list.select_row(self.rows[name][0])
 
     def spawn(self, name):
+        GLib.timeout_add(1800, lambda: (self.apply_tmux_theme(), False)[1])
         p = load().get(name)
         if not p or name not in self.terms: return
         env = [f"{k}={v}" for k, v in os.environ.items() if k != "TMUX"]
@@ -542,6 +577,8 @@ class App(Gtk.Application):
         for nome, lay in [("colunas (lado a lado)", "even-horizontal"), ("linhas (empilhados)", "even-vertical"),
                           ("grade", "tiled"), ("principal à esquerda", "main-vertical"), ("principal em cima", "main-horizontal")]:
             add(f"Layout: {nome}", "", lambda l=lay: self.set_layout(l))
+        add("Orquestrar: tarefa em paralelo…", "vários agentes, 1 tarefa", self.on_parallel)
+        add("Orquestrar: abrir agente orquestrador", "ele divide e dispara subagentes", self.open_orchestrator)
         add("Mudanças: ver diff e commitar", "Ctrl+G", self.on_changes)
         add("Painel de agentes: mostrar/ocultar", "Ctrl+J", self.toggle_agents)
         add("Lista de projetos: mostrar/ocultar", "Ctrl+B", self.toggle_side)
@@ -605,6 +642,78 @@ class App(Gtk.Application):
         w.connect("close-request", lambda *_: (self.terms.get(self.cur) and GLib.idle_add(lambda: (self.terms[self.cur].grab_focus(), False)[1]), False)[1])
         entry.set_text(inicial); fill(); w.present(); entry.grab_focus(); entry.set_position(-1)
 
+    # ---------- orquestração: a mesma tarefa em vários agentes, cada um na sua worktree
+    def open_orchestrator(self):
+        """Claude (ou o 1º agente que aceite tarefa por argumento) com a instrução de orquestrador: ele usa o MCP para
+        dividir o trabalho e disparar subagentes em worktrees."""
+        if not self.cur: return
+        ags = [a for a in agentes() if a.get("cmd")]
+        ag = next((a for a in ags if a["name"].lower() == "claude"), None) or next(
+            (a for a in ags if os.path.basename((shlex.split(a["cmd"]) or [""])[0]) in core.PROMPT_ARG), None)
+        if not ag:
+            Gtk.AlertDialog(message="Sem agente para orquestrar", detail="Cadastre o Claude (ou outro agente que aceite uma tarefa inicial) em Configurações → Agentes.").show(self.win); return
+        cmd, _ = core.agent_launch_cmd(ag, core.ORCHESTRATOR_PROMPT)
+        proj = self.cur
+        def work():
+            pid, d, err = core.spawn_pane(proj, "Orquestrador", cmd, False, self.layout)
+            GLib.idle_add(self.after_pane, proj, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_parallel(self, *_):
+        if not self.cur: return
+        proj = self.cur; p = load().get(proj) or {}
+        remoto = bool(p.get("host"))
+        ags = [a for a in agentes() if a.get("cmd")]
+        w = Gtk.Window(title="Tarefa em paralelo", transient_for=self.win, modal=True, default_width=640, default_height=540)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=16, margin_bottom=16, margin_start=18, margin_end=18)
+        info = Gtk.Label(xalign=0, wrap=True, label="Descreva a tarefa uma vez; cada agente marcado recebe o mesmo texto e trabalha por conta própria. "
+                                                    "Depois compare os resultados em Mudanças (Ctrl+G).")
+        info.add_css_class("ag-sub"); box.append(info)
+        tv = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=8, right_margin=8, top_margin=8, bottom_margin=8, vexpand=True)
+        if os.environ.get("RAIDPOINT_PARALLEL_TEXT"): tv.get_buffer().set_text(os.environ["RAIDPOINT_PARALLEL_TEXT"])   # capturas de tela
+        sc = Gtk.ScrolledWindow(vexpand=True, min_content_height=150); sc.set_child(tv); box.append(sc)
+        t = Gtk.Label(label="AGENTES  (quantas cópias de cada)", xalign=0); t.add_css_class("ag-sec"); box.append(t)
+        spins = {}
+        padrao = [a["name"] for a in ags if a["name"].lower() in ("claude", "codex")] or [a["name"] for a in ags[:1]]
+        for a in ags:
+            h = Gtk.Box(spacing=10)
+            h.append(Gtk.Label(label=a["name"], xalign=0, hexpand=True))
+            sp = Gtk.SpinButton.new_with_range(0, 4, 1); sp.set_value(1 if a["name"] in padrao else 0)
+            spins[a["name"]] = sp; h.append(sp); box.append(h)
+        wt = Gtk.CheckButton(label="Isolar cada agente em uma git worktree (recomendado)", active=not remoto, sensitive=not remoto)
+        if remoto: wt.set_tooltip_text("Worktree não funciona em projeto remoto")
+        box.append(wt)
+        st = Gtk.Label(xalign=0, wrap=True); st.add_css_class("ag-sub"); box.append(st)
+        go = Gtk.Button(label="Disparar agentes", halign=Gtk.Align.END); go.add_css_class("agente"); box.append(go)
+        w.set_child(box)
+
+        def disparar(*_):
+            b = tv.get_buffer(); prompt = b.get_text(b.get_start_iter(), b.get_end_iter(), False).strip()
+            nomes = [n for n, sp in spins.items() for _ in range(int(sp.get_value()))]
+            if not prompt: st.set_label("Escreva a tarefa."); return
+            if not nomes: st.set_label("Marque pelo menos um agente (cópias > 0)."); return
+            go.set_sensitive(False); st.set_label(f"Abrindo {len(nomes)} agente(s)…")
+            def work():
+                res = core.run_task(proj, prompt, nomes, wt.get_active(), self.layout)
+                GLib.idle_add(fim, res)
+            def fim(res):
+                erros = [f"{r['agent']}: {r['error']}" for r in res if r["error"]]
+                if erros:
+                    st.set_label("Alguns não abriram:\n" + "\n".join(erros)); go.set_sensitive(True)
+                else:
+                    w.close()
+                    if proj in self.terms: self.terms[proj].grab_focus()
+                return False
+            threading.Thread(target=work, daemon=True).start()
+        go.connect("clicked", disparar)
+        kc = Gtk.EventControllerKey(); kc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        def key(c, kv, kcode, stt):
+            if kv == Gdk.KEY_Escape: w.close(); return True
+            if kv in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and stt & Gdk.ModifierType.CONTROL_MASK: disparar(); return True
+            return False
+        kc.connect("key-pressed", key); w.add_controller(kc)
+        w.present(); tv.grab_focus()
+
     # ---------- Configurações (visual, estilo VS Code); salva sozinho a cada mudança
     def on_settings(self, *_):
         for x in Gtk.Window.list_toplevels():
@@ -635,15 +744,49 @@ class App(Gtk.Application):
 
         # --- Terminal
         t = page("terminal", "Terminal", "Aparência do texto nos painéis. Vale na hora.")
-        fd = Gtk.FontDialogButton(dialog=Gtk.FontDialog(modal=True))
-        fd.set_font_desc(Pango.FontDescription(self.cfg["terminal"]["font"]))
-        def font_mudou(*_):
-            d = fd.get_font_desc()
-            if not d: return
-            self.cfg["terminal"]["font"] = d.to_string(); salvar()
+        # seletor de fonte próprio (o Gtk.FontDialog trava/derruba o app sem portal de desktop)
+        from gi.repository import PangoCairo
+        fdesc = Pango.FontDescription(self.cfg["terminal"]["font"])
+        fs = {"fam": fdesc.get_family() or "Noto Sans Mono", "size": int(round(fdesc.get_size() / Pango.SCALE)) or 11, "pronto": False}
+        try:
+            nome_mono = re.compile(r"mono|code|courier|consol|terminal|typewriter|hack|fira ?code|iosevka|cascadia|menlo", re.I)
+            fams = sorted({f.get_name() for f in PangoCairo.FontMap.get_default().list_families()
+                           if f.is_monospace() or nome_mono.search(f.get_name())}, key=str.lower)
+        except Exception: fams = []
+        if fs["fam"] not in fams: fams.insert(0, fs["fam"])
+        def fonte_mudou():
+            if not fs["pronto"]: return
+            self.cfg["terminal"]["font"] = f"{fs['fam']} {fs['size']}"; salvar()
             for tm in self.terms.values(): tm.set_font(Pango.FontDescription(self.cfg["terminal"]["font"]))
-        fd.connect("notify::font-desc", font_mudou)
-        linha(t, "Fonte", "Use uma fonte monoespaçada.", fd)
+        busca = Gtk.SearchEntry(placeholder_text="Buscar fonte monoespaçada…")
+        flista = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE); flista.add_css_class("lista")
+        sel = None
+        for fam in fams:
+            r = Gtk.ListBoxRow(); r.fam = fam
+            l = Gtk.Label(xalign=0, margin_top=4, margin_bottom=4, margin_start=8)
+            l.set_text(fam)
+            r.set_child(l); flista.append(r)
+            if fam == fs["fam"]: sel = r
+        flista.set_filter_func(lambda r: busca.get_text().strip().lower() in r.fam.lower())
+        busca.connect("search-changed", lambda *_: flista.invalidate_filter())
+        amostra = Gtk.Label(xalign=0, margin_top=2, wrap=False, ellipsize=Pango.EllipsizeMode.END)
+        def mostra():
+            amostra.set_markup(f"<span font_family=\"{GLib.markup_escape_text(fs['fam'])}\" size=\"large\">"
+                               "AaBb 0123 {}[]() → git commit -m</span>")
+        def escolheu(_l, r):
+            if r is not None: fs["fam"] = r.fam; mostra(); fonte_mudou()
+        flista.connect("row-selected", escolheu)
+        fsc = Gtk.ScrolledWindow(min_content_height=190, max_content_height=190, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        fsc.set_child(flista)
+        fcx = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, width_request=330)
+        fcx.append(busca); fcx.append(fsc); fcx.append(amostra); mostra()
+        linha(t, "Fonte", "Só fontes monoespaçadas. Digite para buscar.", fcx)
+        fsp = Gtk.SpinButton.new_with_range(6, 40, 1); fsp.set_value(fs["size"])
+        def tam_mudou(b): fs["size"] = int(b.get_value()); fonte_mudou()
+        fsp.connect("value-changed", tam_mudou)
+        linha(t, "Tamanho da fonte (pt)", "Tamanho base; o zoom abaixo multiplica este valor.", fsp)
+        if sel: flista.select_row(sel); GLib.idle_add(lambda: (sel.grab_focus() if False else None, False)[1])
+        fs["pronto"] = True
         sp = Gtk.SpinButton.new_with_range(50, 300, 5); sp.set_value(round(self.zoom * 100))
         sp.connect("value-changed", lambda b: self.set_zoom(b.get_value() / 100))
         linha(t, "Tamanho (zoom %)", "Também: Ctrl + / Ctrl − / Ctrl 0 / Ctrl+roda.", sp)
@@ -652,6 +795,8 @@ class App(Gtk.Application):
             self.cfg["terminal"]["zoom_step"] = round(b.get_value() / 100, 2); salvar()
         st.connect("value-changed", step_mudou)
         linha(t, "Passo do zoom (%)", "Quanto cada Ctrl + / Ctrl − muda.", st)
+        # --- Aparência
+        ap = page("aparencia", "Aparência", "Cores e formato da interface. Vale na hora.")
         nomes = list(core.THEMES)
         dd = Gtk.DropDown.new_from_strings(nomes)
         atual = self.cfg["terminal"].get("theme")
@@ -659,8 +804,35 @@ class App(Gtk.Application):
         def tema_mudou(*_):
             self.cfg["terminal"]["theme"] = nomes[dd.get_selected()]; salvar()
             for tm in self.terms.values(): self.apply_theme(tm)
+            self.apply_ui_theme()
         dd.connect("notify::selected", tema_mudou)
-        linha(t, "Tema de cores", "Cores do terminal.", dd)
+        linha(ap, "Tema de cores", "Muda a interface inteira, o terminal e as bordas do tmux.", dd)
+        acs = list(core.ACCENTS)
+        da = Gtk.DropDown.new_from_strings(acs)
+        da.set_selected(acs.index(self.cfg["terminal"].get("accent")) if self.cfg["terminal"].get("accent") in acs else 0)
+        def acento_mudou(*_):
+            self.cfg["terminal"]["accent"] = acs[da.get_selected()]; salvar(); self.apply_ui_theme()
+        da.connect("notify::selected", acento_mudou)
+        linha(ap, "Cor de destaque", "Botões, painel ativo e abas.", da)
+        cur = Gtk.DropDown.new_from_strings(core.CURSORES)
+        cur.set_selected(core.CURSORES.index(self.cfg["terminal"].get("cursor")) if self.cfg["terminal"].get("cursor") in core.CURSORES else 0)
+        def cursor_mudou(*_):
+            self.cfg["terminal"]["cursor"] = core.CURSORES[cur.get_selected()]; salvar()
+            for tm in self.terms.values(): self.apply_term_opts(tm)
+        cur.connect("notify::selected", cursor_mudou)
+        linha(ap, "Cursor", "Forma do cursor do terminal.", cur)
+        sw = Gtk.Switch(active=bool(self.cfg["terminal"].get("cursor_blink")))
+        def pisca_mudou(*_):
+            self.cfg["terminal"]["cursor_blink"] = sw.get_active(); salvar()
+            for tm in self.terms.values(): self.apply_term_opts(tm)
+        sw.connect("notify::active", pisca_mudou)
+        linha(ap, "Cursor piscando", "", sw)
+        sb = Gtk.SpinButton.new_with_range(140, 360, 10); sb.set_value(int(self.cfg.get("window", {}).get("sidebar_width", 190)))
+        def largura_mudou(b):
+            self.cfg.setdefault("window", {})["sidebar_width"] = int(b.get_value()); salvar()
+            self.side.set_size_request(int(b.get_value()), -1)
+        sb.connect("value-changed", largura_mudou)
+        linha(ap, "Largura da lista de projetos (px)", "", sb)
 
         # --- Atalhos
         k = page("atalhos", "Atalhos", "Clique no atalho e aperte a nova combinação. Backspace remove, Esc cancela.")
@@ -742,6 +914,8 @@ class App(Gtk.Application):
         kc2 = Gtk.EventControllerKey()
         kc2.connect("key-pressed", lambda c, kv, kcode, stt: (w.close(), True)[1] if kv == Gdk.KEY_Escape and not capturando["k"] else False)
         w.add_controller(kc2)
+        pg = os.environ.get("RAIDPOINT_SETTINGS_PAGE")        # só para capturas de tela
+        if pg: stack.set_visible_child_name(pg)
         w.present()
 
     def open_config(self):
@@ -915,6 +1089,9 @@ class App(Gtk.Application):
             self.usage_btn.set_label(f"◔ 5h {fh['used_percentage']:.0f}%")
         else:
             self.usage_btn.set_label(f"◔ 5h {f(S['5h']['new'])}")
+        cx5 = core.codex_plan()
+        if cx5 and cx5.get("primary") and cx5["age_s"] < 6 * 3600 and cx5["primary"].get("used_percent") is not None:
+            self.usage_btn.set_label(self.usage_btn.get_label() + f" · cx {cx5['primary']['used_percent']:.0f}%")
         for nome, k, lim in (("5 horas", "five_hour", 80), ("semana", "seven_day", 85)):
             w = (pl or {}).get(k)
             if w and w.get("used_percentage", 0) >= lim and (k, w.get("resets_at")) not in self._plan_alerted:
@@ -933,6 +1110,19 @@ class App(Gtk.Application):
             L.append("")
         else:
             L.append("<span foreground='#6c7086'>Plano: sem dados. Ative com: raidpoint install-statusline</span>\n")
+        cx = core.codex_plan()
+        if cx and (cx.get("primary") or cx.get("secondary")):
+            L.append("<b>Codex</b>  <span foreground='#6c7086'>plano %s · dado há %s</span>" % (cx.get("plan_type") or "?", core.ago(cx["ts"])))
+            for nome, k in (("5 horas", "primary"), ("semana", "secondary")):
+                w = cx.get(k)
+                if w and w.get("used_percent") is not None:
+                    pct = w["used_percent"]; cor_ = "#f38ba8" if pct >= 85 else ("#f9e2af" if pct >= 60 else "#a6e3a1")
+                    rs = time.strftime("%d/%m %H:%M", time.localtime(w["resets_at"])) if w.get("resets_at") else "?"
+                    L.append(f"<tt>{nome:<8}</tt><span foreground='{cor_}'><b>{pct:>3.0f}%</b></span>  <span foreground='#6c7086'>reseta {rs}</span>")
+            cr = cx.get("credits") or {}
+            if cr.get("unlimited"): L.append("<tt>créditos </tt>ilimitados")
+            elif cr.get("has_credits"): L.append(f"<tt>créditos </tt><b>{esc(str(cr.get('balance', '?')))}</b>")
+            L.append("")
         L += ["<b>Claude Code — tokens</b>  <span foreground='#6c7086'>(entrada + saída + cache criado)</span>"]
         for w in ("5h", "24h", "7d"):
             o = S[w]

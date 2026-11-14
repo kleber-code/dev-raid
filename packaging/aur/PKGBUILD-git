@@ -1,0 +1,28 @@
+# Maintainer: kleber-code <https://github.com/kleber-code>
+# Pacote devraid-git (último commit). Para publicar no AUR, copie este arquivo como "PKGBUILD" em um repo "devraid-git".
+pkgname=devraid-git
+pkgver=0.2.0.r0.g0000000
+pkgrel=1
+pkgdesc='Orchestrate many AI coding agents in persistent terminals, one workspace per project (git version)'
+arch=('any')
+url='https://github.com/kleber-code/dev-raid'
+license=('MIT')
+depends=('python>=3.11' 'python-gobject' 'gtk4' 'vte4' 'tmux' 'github-cli' 'libsecret')
+optdepends=('mosh: remote projects over mosh' 'gnome-keyring: store per-project secrets in the system keyring')
+makedepends=('git' 'make')
+provides=('devraid')
+conflicts=('devraid')
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd dev-raid
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+    || printf '0.2.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  cd dev-raid
+  make DESTDIR="$pkgdir" PREFIX=/usr install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/devraid/LICENSE"
+}
