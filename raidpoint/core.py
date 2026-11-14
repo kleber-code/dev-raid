@@ -196,6 +196,8 @@ def run_tmux(project, *a, timeout=15):
     except Exception as e:
         return subprocess.CompletedProcess(cmd, 1, "", str(e))
 
+import socket as _socket
+_HOSTS = {_socket.gethostname(), _socket.gethostname().split(".")[0]}
 PANE_FMT = "#{pane_id}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}\t#{pane_active}\t#{pane_pid}\t#{t:window_activity}\t#{window_activity}"
 
 def list_panes(project):
@@ -207,6 +209,7 @@ def list_panes(project):
         if len(f) < 9: continue
         try: age = max(0, int(now - int(f[8])))
         except ValueError: age = 999
+        if f[1] in _HOSTS: f[1] = "Shell"           # título padrão do tmux = nome da máquina
         out.append({"id": f[0], "title": f[1], "cmd": f[2], "path": f[3], "window": f[4],
                     "active": f[5] == "1", "pid": f[6], "idle_s": age})
     return out

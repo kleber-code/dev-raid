@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>/dev/raid — orquestre agentes de IA em terminais, por projeto</title>
+<meta name="description" content="/dev/raid é um app de desktop (GTK4 + VTE + tmux) para rodar vários agentes de IA — Claude Code, Codex, Aider — em paralelo, um conjunto de terminais por projeto, que sobrevive quando você fecha a janela.">
+<meta property="og:title" content="/dev/raid">
+<meta property="og:description" content="Orquestre vários agentes de IA em terminais persistentes, um conjunto por projeto. Código aberto, para Linux.">
+<meta property="og:image" content="https://kleber-code.github.io/dev-raid/img/og.png">
+<meta name="theme-color" content="#11111b">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="shell">
+  <a class="brand" href="./">/dev/<b>raid</b></a>
+  <nav>
+    <a href="#recursos">Recursos</a>
+    <a href="#instalar">Instalar</a>
+    <a href="guia.html">Guia</a>
+    <a href="guia.html#atalhos">Atalhos</a>
+    <a class="gh" href="https://github.com/kleber-code/dev-raid">GitHub</a>
+  </nav>
+</div></header>
+
+<main>
+<section class="hero"><div class="shell">
+  <span class="pill">código aberto · MIT · Linux (GTK4)</span>
+  <h1>/dev/<b>raid</b></h1>
+  <p class="lede">Um “VS Code de terminais” para <strong>orquestrar vários agentes de IA</strong> em paralelo.
+    Um conjunto de terminais por projeto, que <strong>continua vivo</strong> quando você fecha a janela.</p>
+  <div class="cta">
+    <a class="btn p" href="#instalar">Instalar</a>
+    <a class="btn" href="guia.html">Ler o guia</a>
+    <a class="btn" href="https://github.com/kleber-code/dev-raid">Ver no GitHub</a>
+  </div>
+  <div class="shot"><img src="img/main.webp" width="1400" height="780" alt="/dev/raid com quatro painéis — shell, Claude, Codex e outro shell — e o painel de agentes aberto à direita"></div>
+</div></section>
+
+<section class="s" id="recursos"><div class="shell">
+  <h2>Feito para quem programa com agentes</h2>
+  <p class="sub">Rodar três agentes ao mesmo tempo vira bagunça de abas e janelas. O /dev/raid dá um lugar para cada projeto e deixa você ver, aprovar e controlar tudo por teclado.</p>
+  <div class="grid">
+    <div class="card"><h3><i>01</i>Terminais que sobrevivem</h3><p>Cada projeto é uma sessão tmux. Feche o app, volte horas depois: os agentes continuam rodando exatamente onde estavam.</p></div>
+    <div class="card"><h3><i>02</i>Vários agentes, sem conflito</h3><p>Abra Claude Code, Codex, Aider ou Ollama lado a lado. Cada um pode ganhar uma <strong>git worktree isolada</strong>, com branch própria, para não pisar no trabalho do outro.</p></div>
+    <div class="card"><h3><i>03</i>Revise o que o agente fez</h3><p>A janela de <strong>Mudanças</strong> mostra o diff colorido de cada arquivo, deixa reverter um arquivo e commitar — inclusive nas worktrees dos agentes.</p></div>
+    <div class="card"><h3><i>04</i>Tudo por teclado</h3><p><kbd>Ctrl</kbd>+<kbd>D</kbd> abre as ações: abrir agente, dividir painel, trocar layout, mudar tema. Atalhos de tiling WM (<kbd>Alt</kbd>+setas, <kbd>Alt</kbd>+1…9) e todos reconfiguráveis.</p></div>
+    <div class="card"><h3><i>05</i>Subagentes e status ao vivo</h3><p>O painel de agentes mostra quem está trabalhando, esperando ou terminou, incluindo subagentes do Claude Code (via hooks), commits recentes e o CI do GitHub.</p></div>
+    <div class="card"><h3><i>06</i>Memória e segredos por projeto</h3><p>Notas em markdown com busca que entram no contexto das novas sessões. Segredos ficam no chaveiro do sistema: o agente só vê os <em>nomes</em> e você aprova cada uso.</p></div>
+    <div class="card"><h3><i>07</i>Servidores remotos</h3><p>Projetos em VPS via <code>mosh</code> ou ssh, direto do seu <code>~/.ssh/config</code>. O tmux roda no servidor — a conexão cai, o trabalho não.</p></div>
+    <div class="card"><h3><i>08</i>Servidor MCP embutido</h3><p>Os próprios agentes podem listar projetos, abrir outros agentes, mandar mensagem, ler a saída de um painel e usar memória e segredos.</p></div>
+    <div class="card"><h3><i>09</i>GitHub sem fricção</h3><p>Lista todos os seus repositórios (usuário e orgs) usando o <code>gh</code> que você já tem. Abrir um repo clona e vira projeto.</p></div>
+  </div>
+</div></section>
+
+<section class="s alt"><div class="shell">
+  <div class="two">
+    <div>
+      <h2>Ações em um atalho</h2>
+      <p>Aperte <kbd>Ctrl</kbd>+<kbd>D</kbd> e digite. Abrir um agente (com ou sem worktree), novo painel, aba, layout, zoom do texto, trocar de projeto, abrir configurações… Tudo em uma lista com busca, sem tirar a mão do teclado.</p>
+      <ul><li>Setas e <kbd>Enter</kbd> para escolher, <kbd>Esc</kbd> fecha</li><li>Busca que ignora acentos</li><li>O atalho é seu: mude em Configurações</li></ul>
+    </div>
+    <div class="shot"><img src="img/palette.webp" width="560" height="420" loading="lazy" alt="Paleta de ações filtrada por “agente”, listando Claude, Codex, Aider e Ollama, cada um também em worktree isolada"></div>
+  </div>
+</div></section>
+
+<section class="s"><div class="shell">
+  <div class="two">
+    <div class="shot"><img src="img/changes.webp" width="1400" height="780" loading="lazy" alt="Janela de Mudanças com a lista de arquivos alterados e o diff colorido de src/api.py"></div>
+    <div>
+      <h2>Veja e aprove o que mudou</h2>
+      <p>Depois que o agente trabalha, você quer ver o diff antes de aceitar. A janela de Mudanças (<kbd>Ctrl</kbd>+<kbd>G</kbd>) lista os arquivos alterados da pasta principal e de cada worktree de agente.</p>
+      <ul><li>Diff colorido por arquivo</li><li>Reverter só um arquivo (com confirmação)</li><li>Commit de tudo, com a sua mensagem</li></ul>
+    </div>
+  </div>
+</div></section>
+
+<section class="s alt"><div class="shell">
+  <div class="two">
+    <div>
+      <h2>Configurações visuais</h2>
+      <p>Fonte, tamanho do texto, tema de cores, atalhos e a lista de agentes — tudo em um painel, salvo na hora. Nada de editar arquivo (embora o <code>config.toml</code> esteja lá, se você preferir).</p>
+      <ul><li>Quatro temas: Catppuccin, Tokyo Night, Gruvbox, Nord</li><li>Captura de atalho: clique e aperte a combinação</li><li>Adicione qualquer CLI como agente</li></ul>
+    </div>
+    <div class="shot"><img src="img/settings.webp" width="900" height="600" loading="lazy" alt="Painel de configurações, página Terminal, com fonte, zoom e tema"></div>
+  </div>
+</div></section>
+
+<section class="s" id="instalar"><div class="shell">
+  <h2>Instalar</h2>
+  <p class="sub">Linux com GTK4 e VTE (testado no Fedora; pensado para Arch + sway). Precisa de <code>tmux</code>, <code>gh</code> e <code>libsecret</code>.</p>
+  <pre><code>git clone https://github.com/kleber-code/dev-raid.git &amp;&amp; cd dev-raid
+./install.sh        # confere as dependências e instala os comandos
+gh auth login       # o app usa a autenticação do gh
+raidpoint install   # registra hooks e MCP no Claude Code e no Codex
+devraid             # abre o app</code></pre>
+  <p>No Arch: <code>sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring mosh noto-fonts</code><br>
+     No Fedora: <code>sudo dnf install python3-gobject gtk4 vte291-gtk4 tmux gh libsecret mosh</code></p>
+  <p><a class="btn p" href="guia.html">Continuar no guia →</a></p>
+</div></section>
+</main>
+
+<footer><div class="shell">
+  /dev/raid · MIT · feito por <a href="https://github.com/kleber-code">kleber-code</a> ·
+  <a href="https://github.com/kleber-code/dev-raid">código-fonte</a> · um projeto da <a href="https://www.satela.com.br">Satela</a>
+</div></footer>
+</body>
+</html>

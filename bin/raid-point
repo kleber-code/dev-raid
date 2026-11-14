@@ -32,6 +32,7 @@ def cor(nome):
 CSS = """
 window, headerbar { background: #1e1e2e; color: #cdd6f4; }
 stacksidebar { background: #181825; }
+textview, textview text { background-color: #181825; color: #cdd6f4; }
 headerbar { box-shadow: none; border-bottom: 1px solid #11111b; min-height: 40px; }
 headerbar .title { font-weight: 600; font-size: 13px; }
 headerbar .subtitle { color: #6c7086; font-size: 11px; }
@@ -246,7 +247,11 @@ class App(Gtk.Application):
         self.add_action(a5)
         a3 = Gio.SimpleAction.new("changes", None); a3.connect("activate", lambda *_: self.on_changes())
         self.add_action(a3); self.apply_accels()
-        if os.environ.get("RAIDPOINT_CHANGES"): GLib.timeout_add(800, lambda: self.on_changes() and False)
+        mostrar = os.environ.get("RAIDPOINT_SHOW")      # só para desenvolvimento/capturas: changes | palette | settings
+        if mostrar:
+            fn = {"changes": self.on_changes, "settings": self.on_settings,
+                  "palette": lambda: self.palette(os.environ.get("RAIDPOINT_PALETTE_Q", ""))}.get(mostrar)
+            if fn: GLib.timeout_add(1500, lambda: (fn(), False)[1])
         if os.environ.get("RAIDPOINT_AGENTS"): self.rev.set_reveal_child(True)
         GLib.timeout_add_seconds(2, self.agents_tick)
         GLib.timeout_add(400, self.scroll_tick)

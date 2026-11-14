@@ -1,4 +1,11 @@
-# Raid Point
+# /dev/raid
+
+> Orquestre vários agentes de IA em terminais persistentes, um conjunto por projeto.
+> *Run many AI coding agents side by side — one persistent terminal workspace per project (GTK4 + VTE + tmux).*
+
+**[Documentação](https://kleber-code.github.io/dev-raid/)** · **[Guia completo](https://kleber-code.github.io/dev-raid/guia.html)** · MIT
+
+![/dev/raid com quatro painéis e o painel de agentes](docs/img/main.webp)
 
 Um "VS Code de terminais" para **orquestrar vários agentes de IA** (Claude Code, Codex, Aider…)
 em paralelo, um conjunto de terminais por projeto, que **sobrevive** quando você fecha a janela
@@ -25,11 +32,11 @@ em paralelo, um conjunto de terminais por projeto, que **sobrevive** quando voc�
 ## Instalar
 
 ```bash
-git clone git@github.com:kleber-code/raid-point.git && cd raid-point
+git clone https://github.com/kleber-code/dev-raid.git && cd dev-raid
 ./install.sh          # lista dependências que faltam (comandos para Arch e Fedora)
 gh auth login         # o app usa a autenticação do gh (nada de OAuth próprio)
 raidpoint install     # registra hooks e MCP no Claude Code / Codex
-raid-point            # abre o app
+devraid               # abre o app
 ```
 
 Dependências no Arch: `sudo pacman -S python-gobject gtk4 vte4 tmux github-cli libsecret gnome-keyring mosh noto-fonts`
@@ -56,15 +63,19 @@ Teclado e mouse (o prefixo do tmux é `Ctrl+a`):
 | Fechar painel (pergunta antes) / zoom | `Alt+w` / `Alt+z` |
 | Navegar entre painéis | `Alt+setas` |
 
-O botão direito é do Raid Point (e não do tmux ou do programa dentro do terminal), por isso funciona em qualquer painel.
+O botão direito é do /dev/raid (e não do tmux ou do programa dentro do terminal), por isso funciona em qualquer painel.
 
 ## Sway
 
-O sway cuida das janelas; o Raid Point cuida de projetos/agentes. `app_id` = `dev.raidpoint.App`:
+O sway cuida das janelas; o /dev/raid cuida de projetos/agentes. `app_id` = `dev.raidpoint.App`:
 
 ```
 for_window [app_id="dev.raidpoint.App"] move to workspace 2
 ```
+
+## Nomes internos
+
+O app se chamava Raid Point. Os identificadores internos (comando `raidpoint`, pasta `~/.raid_point`, servidor MCP `raidpoint`, `app_id` `dev.raidpoint.App`) foram mantidos para não quebrar instalações existentes.
 
 ## Dados
 
@@ -73,7 +84,7 @@ Tudo em `~/.raid_point/`: `projects.json`, `agents.json` (presets do menu ＋ Ag
 
 ## Segurança e limites (leia)
 
-- `send_message` só entra direto em painéis de **agente** (aberto pelo Raid Point, com o nome de um preset que
+- `send_message` só entra direto em painéis de **agente** (aberto pelo /dev/raid, com o nome de um preset que
   não seja Shell). Qualquer outro painel (shell, ssh, python…) pede a sua aprovação.
 - Os segredos ficam no chaveiro do sistema; as ferramentas MCP **nunca devolvem o valor** ao agente, e o
   `run_with_secrets` só roda depois da sua aprovação, com a saída mascarada (só mascara o valor exato, não
@@ -86,6 +97,6 @@ Tudo em `~/.raid_point/`: `projects.json`, `agents.json` (presets do menu ＋ Ag
 
 ## Desenvolvimento
 
-- `RAIDPOINT_HOME` muda a pasta de dados e `RAIDPOINT_SOCKET` o socket do tmux, para testar sem tocar no uso real.
+- `RAIDPOINT_APPID` troca o ID do app (rodar uma 2ª instância de teste); `RAIDPOINT_SHOW=changes|palette|settings` abre uma janela ao iniciar; `RAIDPOINT_HOME` muda a pasta de dados e `RAIDPOINT_SOCKET` o socket do tmux, para testar sem tocar no uso real.
 - Os nomes de sessão do tmux trocam `.` e `:` por `_` e os alvos usam `=nome:` (casamento exato, não por prefixo).
 - `projects.json` é gravado com trava e de forma atômica; se estiver ilegível, o app se recusa a sobrescrevê-lo.
