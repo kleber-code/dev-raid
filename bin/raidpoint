@@ -21,7 +21,7 @@
 import atexit, json, os, sys, time, shutil, subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 from raidpoint import core, plugins
-from raidpoint.tools import TOOLS, CATALOG_VERSION
+from raidpoint.tools import TOOLS, CATALOG_VERSION, MCP_INSTRUCTIONS
 
 SELF = os.path.realpath(__file__)
 
@@ -49,6 +49,9 @@ def cmd_hook():
                       "Use the MCP tools raidpoint.memory_search / memory_add to look up and record decisions.\n")
                 for m in mems:
                     print(f"- [{m['kind']}] {m['text'][:240]}")
+        if ev in ("SessionStart", "UserPromptSubmit") and proj:
+            note = core.secret_announcement(d.get("session_id"), proj, ev)     # names only; on prompts, only changes
+            if note: print(note)
     except Exception:
         pass
 
@@ -73,7 +76,8 @@ def cmd_mcp():
             params = m.get("params") or {}
             if meth == "initialize":
                 send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                      "capabilities": {"tools": {}}, "serverInfo": {"name": "raidpoint", "version": "0.3"}}})
+                      "capabilities": {"tools": {}}, "serverInfo": {"name": "raidpoint", "version": "0.3"},
+                      "instructions": MCP_INSTRUCTIONS}})
             elif meth == "ping":
                 send({"jsonrpc": "2.0", "id": i, "result": {}})
             elif meth == "tools/list":

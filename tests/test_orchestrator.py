@@ -91,6 +91,19 @@ class HttpProviderTests(HttpCase):
         SEEN.clear(); self.prov().send("x")
         self.assertEqual(SEEN[-1][2], f"Bearer {TOKEN}"); self.assertNotIn(TOKEN, SEEN[-1][1])
 
+class TokenFromKeyring(HttpCase):
+    def test_token_secret_is_read_from_the_keyring_and_never_logged(self):
+        calls = []
+        orig = orch.core.secret_get; self.addCleanup(setattr, orch.core, "secret_get", orig)
+        orch.core.secret_get = lambda proj, name: (calls.append((proj, name)), TOKEN + "\n")[1]
+        p = orch.HttpProvider({"url": self.url, "token_secret": "my-proj/HERMES_TOKEN"}, timeout=5, chat_timeout=5)
+        self.assertEqual(p.send("hi"), "echo: hi"); self.assertEqual(calls[0], ("my-proj", "HERMES_TOKEN"))
+        orch.core.secret_get = lambda proj, name: None
+        with self.assertRaisesRegex(ProviderError, "was not found in the keyring") as cm: p.send("hi")
+        self.assertNotIn(TOKEN, str(cm.exception))
+        for bad in ("noslash", "/NAME", "proj/"):
+            with self.assertRaises(ProviderError, msg=bad): orch.HttpProvider({"url": self.url, "token_secret": bad})
+
 class ConfigValidation(unittest.TestCase):
     def test_url_and_token_rules(self):
         tf = Path(tempfile.mkdtemp(), "t"); tf.write_text("abc"); tf.chmod(0o600)

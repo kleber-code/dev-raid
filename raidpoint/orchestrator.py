@@ -4,7 +4,7 @@ A provider turns what you type into an answer, and may expose a history and a li
 Two ship with the core:
 - ``claude-code``: headless Claude Code (`claude -p`) with the `raidpoint` MCP tools, using your own login;
 - ``http``: any service that speaks the small REST contract of docs/orchestrator.md (bearer token, no redirects,
-  https unless loopback). The token comes from a private file or environment variable, never from the config.
+  https unless loopback). The token comes from a Project secret (keyring), a private file or an environment variable, never from the config.
 """
 import json, os, re, shutil, subprocess, time, urllib.error, urllib.parse, urllib.request
 from pathlib import Path
@@ -52,12 +52,18 @@ class HttpProvider(Provider):
             raise ProviderError("orchestrator.url must use https (plain http only for localhost)")
         self.base = (u.scheme + "://" + u.netloc + u.path).rstrip("/")
         self.name = _clean(cfg.get("name") or u.hostname, 40)
+        self._token_secret = (cfg.get("token_secret") or "").strip()
         self._token_file, self._token_env = (cfg.get("token_file") or "").strip(), (cfg.get("token_env") or "").strip()
         self.chat_timeout, self.timeout = chat_timeout, timeout
         self._token()                                   # fail early if it is missing or unsafe
 
     def _token(self):
-        if self._token_file:
+        if self._token_secret:                           # "<project>/<NAME>": a Project secret in the system keyring
+            proj, _, name = self._token_secret.rpartition("/")
+            tok = (core.secret_get(proj, name) or "").strip() if proj and name else ""
+            if not tok:
+                raise ProviderError(f"secret '{name}' of project '{proj}' was not found in the keyring (token_secret = \"project/NAME\")")
+        elif self._token_file:
             path = Path(self._token_file).expanduser()
             try:
                 if path.stat().st_mode & 0o077:
@@ -68,7 +74,7 @@ class HttpProvider(Provider):
         else:
             tok = os.environ.get(self._token_env, "").strip() if self._token_env else ""
         if not tok or re.search(r"[\x00-\x20\x7f]", tok):
-            raise ProviderError("no usable token: set orchestrator.token_file (chmod 600) or orchestrator.token_env")
+            raise ProviderError("no usable token: set orchestrator.token_secret, token_file (chmod 600) or token_env")
         return tok
 
     def _open(self, method, path, body=None, timeout=None, accept="application/json"):
