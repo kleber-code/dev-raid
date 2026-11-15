@@ -232,7 +232,7 @@ class App(Gtk.Application):
         self.rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT, reveal_child=False)
         self.rev.set_child(asc)
         self.chat = ChatPanel(lambda: self.cur, lambda: self.cfg)
-        self.chat_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT, reveal_child=False)
+        self.chat_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT, reveal_child=False, hexpand=False)
         self.chat_rev.set_child(self.chat)
         self.adj = Gtk.Adjustment(value=0, lower=0, upper=1, step_increment=1, page_increment=1, page_size=1)
         self.vs = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=self.adj)

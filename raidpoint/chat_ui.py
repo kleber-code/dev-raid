@@ -14,15 +14,17 @@ from .orchestrator import ProviderError
 # same hex values as the app's base theme, so core.css_for() recolors them with the chosen theme
 CHAT_CSS = """
 .chat { background: #181825; border-left: 1px solid #11111b; }
-.chat-title { color: #6c7086; font-size: 10px; font-weight: bold; letter-spacing: 1.5px; }
-.chat-msg { padding: 8px 10px; border-radius: 10px; font-size: 12px; margin: 3px 8px; }
+.chat-title { color: #6c7086; font-size: 12px; font-weight: bold; letter-spacing: 1.5px; }
+.chat-msg { padding: 9px 12px; border-radius: 10px; font-size: 14px; margin: 3px 8px; }
 .chat-user { background: #313244; color: #cdd6f4; }
 .chat-ai { background: #1e1e2e; color: #cdd6f4; }
 .chat-err { background: #1e1e2e; color: #f38ba8; }
-.chat-note { color: #6c7086; font-size: 11px; margin: 4px 12px; }
+.chat-note { color: #6c7086; font-size: 13px; margin: 4px 12px; }
 .chat-card { background: #1e1e2e; border: 1px solid #313244; border-radius: 10px; padding: 8px; margin: 4px 8px; }
-.chat-card-title { font-size: 12px; font-weight: bold; }
-textview.chat-input, textview.chat-input text { background-color: #11111b; color: #cdd6f4; }
+.chat-card-title { font-size: 14px; font-weight: bold; }
+.chat-card-text { font-size: 13px; }
+.chat-card button, .chat-input-box button { font-size: 13px; }
+textview.chat-input, textview.chat-input text { background-color: #11111b; color: #cdd6f4; font-size: 14px; }
 .chat-input-box { margin: 6px 8px 8px 8px; border-radius: 8px; background: #11111b; padding: 4px; }
 """
 POLL_SECONDS = 5
@@ -30,7 +32,9 @@ POLL_SECONDS = 5
 
 class ChatPanel(Gtk.Box):
     def __init__(self, get_project, get_cfg, provider_factory=None):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, width_request=340)
+        # hexpand=False on purpose: children with hexpand=True would make this panel "want" free space even when
+        # its revealer is collapsed, leaving an empty strip next to the terminal
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, width_request=360, hexpand=False)
         self.add_css_class("chat")
         self.get_project, self.get_cfg = get_project, get_cfg
         self._factory = provider_factory or orchestrator.get_provider
@@ -202,7 +206,7 @@ class ChatPanel(Gtk.Box):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4); card.add_css_class("chat-card")
             t = Gtk.Label(label=" · ".join(x for x in (a["kind"], a["tool"]) if x) or "approval", xalign=0, wrap=True)
             t.add_css_class("chat-card-title")
-            s = Gtk.Label(label=a["summary"], xalign=0, wrap=True, selectable=True, use_markup=False)
+            s = Gtk.Label(label=a["summary"], xalign=0, wrap=True, selectable=True, use_markup=False); s.add_css_class("chat-card-text")
             o = Gtk.Label(label=" · ".join(x for x in (a["origin"], a["created"]) if x), xalign=0); o.add_css_class("chat-note")
             row = Gtk.Box(spacing=6, halign=Gtk.Align.END)
             no, yes = Gtk.Button(label="Reject"), Gtk.Button(label="Approve"); yes.add_css_class("agent")
