@@ -32,7 +32,7 @@ CONFIG_DEFAULT = {
     # GTK format: "<Control>d", "<Control><Shift>p"...  ("" disables)
     "keys": {
         "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
-        "agents_panel": "<Control>j", "sidebar": "<Control>b",
+        "agents_panel": "<Control>j", "sidebar": "<Control>b", "chat": "<Control><Shift>k",
         "zoom_in": "<Control>plus", "zoom_out": "<Control>minus", "zoom_reset": "<Control>0",
         "copy": "<Control><Shift>c", "paste": "<Control><Shift>v",
     },

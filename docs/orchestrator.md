@@ -38,6 +38,20 @@ Any service that speaks this small REST contract can be the orchestrator. All re
 - Approval ids must match `[A-Za-z0-9_-]{1,40}`. Everything the service returns is shown as plain text.
 - The AI acts on /dev/raid through the MCP server (`raidpoint mcp`) on its own side; this contract is only the chat.
 
+## The chat panel
+
+`Ctrl+Shift+K` (or the envelope button, or *Orchestrator: chat* in the palette) opens the panel on the right.
+
+- The header says where your messages go. With `claude-code` the conversation is per project; with `http` it is whatever the
+  service keeps.
+- `Enter` sends, `Shift+Enter` inserts a new line. One message at a time per conversation.
+- If the service lists pending approvals, they show above the conversation with **Approve** / **Reject** buttons (polled every
+  5 s while the panel is open, and right after each answer).
+- Errors (no token, service unreachable, HTTP 401...) appear in the conversation, not as dialogs.
+- Everything the AI or the service sends is shown as plain text, never as markup.
+
+`tests/smoke_chat_ui.py` exercises the panel against a fake provider on a headless Wayland display (instructions at the top).
+
 ## MCP catalog version
 
 `tools/list` answers with `"_meta": {"devraid/catalogVersion": "1"}`. It changes only when a tool is renamed or its

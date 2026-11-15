@@ -24,6 +24,8 @@ in parallel, one set of terminals per project, that **survives** when you close 
 - **Parallel tasks and orchestrator:** the same task across several agents, each in its own worktree, or a Claude
   that splits the work and opens subagents over MCP. You review in **Changes** (`Ctrl+G`); nothing is merged on its own.
 - **Credits:** plan usage (5-hour and weekly) for **Claude** and **Codex**, credit balance and tokens per project.
+- **Orchestrator chat** (`Ctrl+Shift+K`): talk to the AI of your choice (headless Claude Code, or any service that speaks
+  a small REST contract), approve or reject what it asks for. See `docs/orchestrator.md`.
 - **Agents panel** (`Ctrl+J`): panes, AI sessions and **subagents** (via Claude Code hooks),
   with status; click to open the transcript.
 - **MCP (`raidpoint mcp`)**: agents list/spawn/message other agents, read output, and use project **memory** and
@@ -77,6 +79,7 @@ Keyboard and mouse (the tmux prefix is `Ctrl+a`):
 | Right-click menu | copy, paste, open link, split, zoom, move to new tab, close pane |
 | Hide/show projects | `Ctrl+B` |
 | Agents panel | `Ctrl+J` |
+| Chat with the orchestrator | `Ctrl+Shift+K` |
 | **Actions** (palette: agents, panes, layout, text, settings…) | `Ctrl+D` |
 | **Settings** (look: font, theme, shortcuts, agents) | `Ctrl+,` |
 | Go to tab N / swap pane position | `Alt+1…9` / `Alt+Shift+arrows` |
