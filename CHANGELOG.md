@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **Fix stray floating shells:** tmux 3.8 binds Ctrl+drag (and `prefix *`, `prefix Tab`, the empty-area right-click menu) to floating panes,
+  which fired by accident on Ctrl+click/drag. The default `tmux.conf` now unbinds them. Existing installs keep their own
+  `~/.raid_point/tmux.conf`: append the `unbind` block from `config/tmux.conf`.
 - **Orchestrator:** choose the AI you chat with (`[orchestrator]` in config.toml): headless Claude Code, or any service that speaks
   the small REST contract in `docs/orchestrator.md` (bearer token from a private file, https only, no redirects, optional SSE).
 - **Orchestrator chat panel** (`Ctrl+Shift+K`) with the approvals the AI is waiting for (approve / reject).
