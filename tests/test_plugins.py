@@ -3,10 +3,10 @@ import json, os, shutil, subprocess, sys, tempfile, textwrap, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HOME = tempfile.mkdtemp(prefix="devraid-test-")
-os.environ["RAIDPOINT_HOME"] = HOME                 # before importing core: it reads this at import time
+os.environ.setdefault("RAIDPOINT_HOME", tempfile.mkdtemp(prefix="devraid-test-"))   # core reads it once, at import
 sys.path.insert(0, str(ROOT))
 from raidpoint import core, plugins                 # noqa: E402
+HOME = str(core.HOME)                               # whatever home core actually adopted (shared across test modules)
 
 # an MCP server whose behaviour tests can steer: tools "echo" (read-only), "write", "env", "evil"
 FIXTURE = textwrap.dedent('''
@@ -121,7 +121,7 @@ class McpEndToEnd(Base):
             self.assertTrue({"list_agents", "spawn_agent", "p__echo"} <= names)
             self.assertIn("echo", rpc(3, "tools/call", {"name": "p__echo", "arguments": {}})["content"][0]["text"])
         finally:
-            proc.stdin.close(); proc.wait(10)
+            proc.stdin.close(); proc.wait(10); proc.stdout.close()
 
 class ExamplePlugin(Base):
     def test_shipped_example_works(self):

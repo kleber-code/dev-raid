@@ -1,0 +1,271 @@
+[
+ {
+  "description": "List the /dev/raid projects",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "list_projects"
+ },
+ {
+  "description": "List the GitHub repositories of the user/orgs",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "list_repos"
+ },
+ {
+  "description": "Clone the repository (owner/name) into ~/.raid_point/workspaces/<repo> and return the path",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "repo": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo"
+   ],
+   "type": "object"
+  },
+  "name": "open_repo"
+ },
+ {
+  "description": "Claude Code token usage over the last 5h/24h/7d (from local transcripts)",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "usage"
+ },
+ {
+  "description": "Branch, recent commits and GitHub Actions (CI) runs of the project",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "ci_status"
+ },
+ {
+  "description": "List panes/agents, AI sessions and subagents of a project",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "list_agents"
+ },
+ {
+  "description": "Open an agent (preset from agents.json) in a new pane; worktree=true isolates it in a git worktree",
+  "inputSchema": {
+   "properties": {
+    "agent": {
+     "type": "string"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "prompt": {
+     "type": "string"
+    },
+    "worktree": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "agent"
+   ],
+   "type": "object"
+  },
+  "name": "spawn_agent"
+ },
+ {
+  "description": "Send text to a pane/agent (a plain shell requires human approval)",
+  "inputSchema": {
+   "properties": {
+    "enter": {
+     "type": "boolean"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "target": {
+     "type": "string"
+    },
+    "text": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "target",
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "send_message"
+ },
+ {
+  "description": "Read the last lines of a pane (secrets masked)",
+  "inputSchema": {
+   "properties": {
+    "lines": {
+     "type": "integer"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "target": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "target"
+   ],
+   "type": "object"
+  },
+  "name": "read_output"
+ },
+ {
+  "description": "Record a project memory (decision, bug, fact)",
+  "inputSchema": {
+   "properties": {
+    "kind": {
+     "type": "string"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "tags": {
+     "type": "string"
+    },
+    "text": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  },
+  "name": "memory_add"
+ },
+ {
+  "description": "Full-text search in the project memory",
+  "inputSchema": {
+   "properties": {
+    "limit": {
+     "type": "integer"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "query": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  },
+  "name": "memory_search"
+ },
+ {
+  "description": "Most recent project memories",
+  "inputSchema": {
+   "properties": {
+    "limit": {
+     "type": "integer"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "memory_recent"
+ },
+ {
+  "description": "Names of the project secrets (never the values)",
+  "inputSchema": {
+   "properties": {
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "secret_names"
+ },
+ {
+  "description": "Run a command with secrets injected into the environment, after human approval; output masked",
+  "inputSchema": {
+   "properties": {
+    "command": {
+     "type": "string"
+    },
+    "project": {
+     "description": "/dev/raid project name (optional if the cwd is inside one)",
+     "type": "string"
+    },
+    "purpose": {
+     "type": "string"
+    },
+    "secrets": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "command",
+    "secrets"
+   ],
+   "type": "object"
+  },
+  "name": "run_with_secrets"
+ }
+]
