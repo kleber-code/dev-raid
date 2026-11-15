@@ -1347,7 +1347,8 @@ class App(Gtk.Application):
         n = Gio.Notification.new("/dev/raid: an agent is asking for permission"); n.set_body(f"Project {r['project']}")
         self.send_notification("req", n)
         titles = {"secret": "An agent wants to use secrets", "spawn": "An agent wants to open a shell",
-                  "send": "An agent wants to type into a shell"}
+                  "send": "An agent wants to type into a shell",
+                  "plugin": "A plugin wants to run a tool"}
         dlg = Gtk.AlertDialog(message=titles.get(r["kind"], "Request from an agent"),
                               detail=f"Project: {r['project']}\n\n{r['detail']}",
                               buttons=["Deny", "Allow once"], cancel_button=0, default_button=0)

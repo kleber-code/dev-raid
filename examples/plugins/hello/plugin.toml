@@ -1,0 +1,9 @@
+# Example /dev/raid plugin. Copy this directory to ~/.raid_point/plugins/hello, then:
+#   raidpoint plugin info hello
+#   raidpoint plugin enable hello
+name = "hello"                      # must match the directory name
+version = "0.1.0"
+description = "Minimal example: one read-only tool and one tool that needs approval"
+command = ["python3", "./server.py"]    # an MCP server on stdio; ./paths are relative to this directory
+permissions = []                    # scopes you want from the /dev/raid API (shown to the user when enabling)
+env_passthrough = []                # environment variables to pass through (the plugin starts with a minimal env)
