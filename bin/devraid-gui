@@ -616,6 +616,7 @@ class App(Gtk.Application):
         lst = Gtk.ListBox(); lst.add_css_class("rp-list")
         sc = Gtk.ScrolledWindow(vexpand=True, margin_top=8, margin_bottom=10, margin_start=10, margin_end=10,
                                 hscrollbar_policy=Gtk.PolicyType.NEVER)
+        sc.set_size_request(540, 340)       # fixed size: results must not resize the window (GNOME would re-center it on every keystroke)
         sc.set_child(lst)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL); box.append(entry); box.append(sc); w.set_child(box)
         cmds = self.commands()
@@ -627,7 +628,7 @@ class App(Gtk.Application):
                 if all(t in norm(label) for t in q):
                     r = Gtk.ListBoxRow(); r.fn = fn
                     h = Gtk.Box(spacing=8, margin_top=3, margin_bottom=3, margin_start=6, margin_end=6)
-                    h.append(Gtk.Label(label=label, xalign=0, hexpand=True))
+                    h.append(Gtk.Label(label=label, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
                     if hint:
                         l = Gtk.Label(label=hint); l.add_css_class("ag-sub"); h.append(l)
                     r.set_child(h); lst.append(r)
