@@ -8,6 +8,7 @@ from gi.repository import Gtk, Vte, GLib, Gdk, Gio, Pango
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_HERE, ".."))
 from raidpoint import core
+from raidpoint.chat_ui import ChatPanel, CHAT_CSS
 RAIDPOINT = os.path.join(_HERE, "raidpoint")
 
 TMUX = core.TMUX
@@ -167,6 +168,7 @@ class App(Gtk.Application):
         hb.pack_end(self.menu_btn)
         hb.pack_end(action_btn("emblem-system-symbolic", "Settings (Ctrl+,)", lambda *_: self.on_settings()))
         hb.pack_end(action_btn("sidebar-show-right-symbolic", "Agents panel (Ctrl+J)", lambda *_: self.toggle_agents()))
+        hb.pack_end(action_btn("mail-message-new-symbolic", "Chat with the orchestrator (Ctrl+Shift+K)", lambda *_: self.toggle_chat()))
         hb.pack_end(action_btn("document-edit-symbolic", "Changes and commit (Ctrl+G)", lambda *_: self.on_changes()))
         self.win.set_titlebar(hb)
 
@@ -229,28 +231,33 @@ class App(Gtk.Application):
         asc.set_child(self.alist); asc.set_overlay_scrolling(False); asc.add_css_class("side-right"); self.asc = asc
         self.rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT, reveal_child=False)
         self.rev.set_child(asc)
+        self.chat = ChatPanel(lambda: self.cur, lambda: self.cfg)
+        self.chat_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT, reveal_child=False)
+        self.chat_rev.set_child(self.chat)
         self.adj = Gtk.Adjustment(value=0, lower=0, upper=1, step_increment=1, page_increment=1, page_size=1)
         self.vs = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=self.adj)
         self.vs.add_css_class("rp-scroll")
         self._sync = False; self._scroll_pending = None; self._scroll_busy = False; self._user_ts = 0
         self.adj.connect("value-changed", self.on_scroll_user)
         area = Gtk.Box(hexpand=True); area.append(self.stack); area.append(self.vs)
-        root = Gtk.Box(); root.append(self.side); root.append(area); root.append(self.rev)
+        root = Gtk.Box(); root.append(self.side); root.append(area); root.append(self.rev); root.append(self.chat_rev)
         self.win.set_child(root)
 
         a = Gio.SimpleAction.new("side", None); a.connect("activate", lambda *_: self.toggle_side())
         self.add_action(a)
         a2 = Gio.SimpleAction.new("agents", None); a2.connect("activate", lambda *_: self.toggle_agents())
         self.add_action(a2)
+        a6 = Gio.SimpleAction.new("chat", None); a6.connect("activate", lambda *_: self.toggle_chat())
+        self.add_action(a6)
         a4 = Gio.SimpleAction.new("palette", None); a4.connect("activate", lambda *_: self.palette(""))
         self.add_action(a4)
         a5 = Gio.SimpleAction.new("settings", None); a5.connect("activate", lambda *_: self.on_settings())
         self.add_action(a5)
         a3 = Gio.SimpleAction.new("changes", None); a3.connect("activate", lambda *_: self.on_changes())
         self.add_action(a3); self.apply_accels()
-        show = os.environ.get("RAIDPOINT_SHOW")      # development/screenshots only: changes | palette | settings
+        show = os.environ.get("RAIDPOINT_SHOW")      # development/screenshots only: changes | palette | settings | chat
         if show:
-            fn = {"changes": self.on_changes, "settings": self.on_settings, "parallel": self.on_parallel,
+            fn = {"changes": self.on_changes, "settings": self.on_settings, "parallel": self.on_parallel, "chat": self.toggle_chat,
                   "palette": lambda: self.palette(os.environ.get("RAIDPOINT_PALETTE_Q", ""))}.get(show)
             if fn: GLib.timeout_add(1500, lambda: (fn(), False)[1])
         if os.environ.get("RAIDPOINT_AGENTS"): self.rev.set_reveal_child(True)
@@ -284,7 +291,7 @@ class App(Gtk.Application):
     def apply_ui_theme(self):
         """interface colors (theme + accent) and tmux colors (borders/tabs); applies immediately"""
         ui = core.ui_colors(self.cfg["terminal"])
-        self.css.load_from_string(core.css_for(CSS, ui))
+        self.css.load_from_string(core.css_for(CSS + CHAT_CSS, ui))
         self.apply_tmux_theme()
 
     def apply_tmux_theme(self):
@@ -314,7 +321,7 @@ class App(Gtk.Application):
     def apply_accels(self):
         k = self.cfg.get("keys", {})
         for act, name in (("palette", "palette"), ("settings", "settings"), ("changes", "changes"),
-                          ("agents_panel", "agents"), ("sidebar", "side")):
+                          ("agents_panel", "agents"), ("sidebar", "side"), ("chat", "chat")):
             acc = k.get(act, "")
             self.set_accels_for_action(f"app.{name}", [acc] if acc else [])
 
@@ -399,6 +406,7 @@ class App(Gtk.Application):
             term.connect("child-exited", lambda t, s, n=name: self.on_child_exit(n))
             self.terms[name] = term; self.stack.add_named(term, name); self.spawn(name)
         self.cur = name
+        self.chat.on_project_changed()
         self.attn.pop(name, None); self.update_badges()
         self.stack.set_visible_child_name(name)
         self.terms[name].grab_focus()
@@ -585,6 +593,7 @@ class App(Gtk.Application):
         add("Orchestrate: open orchestrator agent", "it splits the work and spawns subagents", self.open_orchestrator)
         add("Changes: view diff and commit", "Ctrl+G", self.on_changes)
         add("Agents panel: show/hide", "Ctrl+J", self.toggle_agents)
+        add("Orchestrator: chat", "Ctrl+Shift+K", self.toggle_chat)
         add("Project list: show/hide", "Ctrl+B", self.toggle_side)
         add("Project secrets…", "", self.on_secrets)
         add("Project: remove…", "", self.on_remove)
@@ -844,7 +853,7 @@ class App(Gtk.Application):
         k = page("shortcuts", "Shortcuts", "Click a shortcut and press the new combination. Backspace removes, Esc cancels.")
         LABELS = [("palette", "Open actions (command palette)"), ("settings", "Open settings"),
                   ("changes", "Changes / diff / commit"), ("agents_panel", "Agents panel"),
-                  ("sidebar", "Project list"), ("zoom_in", "Larger text"), ("zoom_out", "Smaller text"),
+                  ("sidebar", "Project list"), ("chat", "Chat with the orchestrator"), ("zoom_in", "Larger text"), ("zoom_out", "Smaller text"),
                   ("zoom_reset", "Normal text"), ("copy", "Copy"), ("paste", "Paste")]
         capturing = {"k": None}
         buttons = {}
@@ -1218,6 +1227,11 @@ class App(Gtk.Application):
         return False
 
     # ---------- agents panel
+    def toggle_chat(self):
+        on = not self.chat_rev.get_reveal_child()
+        self.chat_rev.set_reveal_child(on); self.chat.set_active(on)
+        if not on and self.cur in self.terms: self.terms[self.cur].grab_focus()
+
     def toggle_agents(self):
         self.rev.set_reveal_child(not self.rev.get_reveal_child()); self._sig = None; self.agents_tick()
 
