@@ -4,6 +4,9 @@
 - **Orchestrator:** choose the AI you chat with (`[orchestrator]` in config.toml): headless Claude Code, or any service that speaks
   the small REST contract in `docs/orchestrator.md` (bearer token from a private file, https only, no redirects, optional SSE).
 - **Orchestrator chat panel** (`Ctrl+Shift+K`) with the approvals the AI is waiting for (approve / reject).
+- **AIs know about secrets:** Claude Code sessions are told the secret *names* of the project at start and what was added or removed
+  on the next prompt (never values); `raidpoint mcp` now ships usage instructions to every MCP client. The orchestrator token can come
+  from a Project secret (`token_secret = "project/NAME"`).
 - **MCP catalog:** tools moved to `raidpoint/tools.py` (no change to names, parameters or output); `tools/list` now carries
   `_meta.devraid/catalogVersion`, and `tests/golden_tools.json` locks the catalog.
 - **Plugins:** out-of-process MCP plugins in `~/.raid_point/plugins/<name>/plugin.toml`, merged into `raidpoint mcp` as

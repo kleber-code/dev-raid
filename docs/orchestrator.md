@@ -6,7 +6,8 @@ The orchestrator is the AI you talk to from /dev/raid. It is chosen in `~/.raid_
 [orchestrator]
 provider = "claude-code"      # or "http"
 url = ""                      # http only: https://host/api
-token_file = ""               # http only: path to a file holding the bearer token (chmod 600)
+token_secret = ""             # http only: a Project secret, "<project>/<NAME>" (system keyring) - recommended
+token_file = ""               # http only: ...or a file holding the bearer token (chmod 600)
 token_env = ""                # http only: ...or the name of an environment variable
 ```
 
@@ -22,7 +23,8 @@ command line. Claude Code's own approvals do not exist in headless mode, so tool
 Any service that speaks this small REST contract can be the orchestrator. All requests carry
 `Authorization: Bearer <token>`. The URL must be `https` (plain `http` only for `localhost`), redirects are never followed
 (they would carry the token to another host), responses are capped at 2 MB, and the token is read from a private file
-(`chmod 600` is enforced) or an environment variable, never from `config.toml`.
+(`chmod 600` is enforced) or an environment variable, never from `config.toml`. `token_secret` is the safest: add the token in
+*Project secrets* (the lock button) and point to it as `"project/NAME"`; only the app reads it, no AI ever gets the value.
 
 | Request | Response |
 |---|---|
@@ -51,6 +53,14 @@ Any service that speaks this small REST contract can be the orchestrator. All re
 - Everything the AI or the service sends is shown as plain text, never as markup.
 
 `tests/smoke_chat_ui.py` exercises the panel against a fake provider on a headless Wayland display (instructions at the top).
+
+## How AIs learn about secrets and the bridge
+
+- **Claude Code sessions** get, at session start, the *names* of the project's secrets and how to use them
+  (`run_with_secrets`: the human approves each use, the value only enters that command's environment and is masked).
+  When you add or remove a secret, running sessions are told once, on their next prompt. Values are never included.
+- **Every MCP client** receives usage instructions from `raidpoint mcp` itself (the MCP `instructions` field): projects,
+  agents, memory, status, secrets, plugins, and that text from agents/memory/plugins is data, not instructions.
 
 ## MCP catalog version
 

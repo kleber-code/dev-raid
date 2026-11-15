@@ -28,7 +28,7 @@ CONFIG_DEFAULT = {
     "window": {"sidebar_width": 190},
     "updates": {"auto": True},
     # the AI you chat with: "claude-code" (headless Claude Code) or "http" (see docs/orchestrator.md)
-    "orchestrator": {"provider": "claude-code", "url": "", "token_file": "", "token_env": ""},
+    "orchestrator": {"provider": "claude-code", "url": "", "token_secret": "", "token_file": "", "token_env": ""},
     # GTK format: "<Control>d", "<Control><Shift>p"...  ("" disables)
     "keys": {
         "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
@@ -473,8 +473,23 @@ def mem_recent(project, limit=8):
 def _st(*a, inp=None):
     return subprocess.run(["secret-tool", *a], text=True, capture_output=True, input=inp)
 
+SECRETS_REV = DATA / "secrets-rev.json"        # {project: counter}: bumped whenever a secret is added or removed
+SECRETS_SEEN = DATA / "secrets-seen.json"      # {session_id: {project: {"rev", "names"}}}: what each AI session was told
+
+def _json_file(path):
+    try:
+        d = json.loads(path.read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _bump_rev(project):
+    d = _json_file(SECRETS_REV); d[project] = int(d.get(project, 0)) + 1
+    write_json_atomic(SECRETS_REV, d)
+
 def secret_set(project, name, value):
     r = _st("store", "--label", f"raidpoint:{project}:{name}", "service", "raidpoint", "project", project, "name", name, inp=value)
+    if r.returncode == 0: _bump_rev(project)
     return r.returncode == 0
 
 def secret_get(project, name):
@@ -482,11 +497,40 @@ def secret_get(project, name):
     return r.stdout if r.returncode == 0 and r.stdout else None
 
 def secret_rm(project, name):
-    return _st("clear", "service", "raidpoint", "project", project, "name", name).returncode == 0
+    ok = _st("clear", "service", "raidpoint", "project", project, "name", name).returncode == 0
+    if ok: _bump_rev(project)
+    return ok
 
 def secret_names(project):
     r = _st("search", "--all", "service", "raidpoint", "project", project)
     return sorted(set(re.findall(r"attribute\.name = (.+)", r.stdout + r.stderr)))
+
+SECRET_HOWTO = ("You only ever see secret NAMES, never values. To use one, call the MCP tool raidpoint.run_with_secrets "
+                "(command, secrets=[NAMES], purpose): the human approves each use, the value is injected only into that "
+                "command's environment and is masked in its output. Never ask the user to paste a secret into the chat; "
+                "if one is missing, ask them to add it in Project secrets (the lock button in the /dev/raid title bar).")
+
+def secret_announcement(session_id, project, event):
+    """Context text for an AI session about the project's secrets (NAMES only). SessionStart: the full list and how to use
+    it. Later prompts: only what was added/removed since this session was last told (nothing when nothing changed)."""
+    if not (session_id and project): return ""
+    rev = int(_json_file(SECRETS_REV).get(project, 0))
+    seen = _json_file(SECRETS_SEEN)
+    rec = (seen.get(session_id) or {}).get(project)
+    if event != "SessionStart" and rec and rec.get("rev") == rev: return ""
+    names = secret_names(project)
+    prev = set(rec.get("names", [])) if rec else None
+    seen.setdefault(session_id, {})[project] = {"rev": rev, "names": names}
+    for k in list(seen)[:-200]: del seen[k]                      # keep the most recent sessions only
+    write_json_atomic(SECRETS_SEEN, seen)
+    if event == "SessionStart" or prev is None:
+        return (f"# Secrets of project '{project}' (/dev/raid)\nAvailable by name: {', '.join(names)}.\n{SECRET_HOWTO}\n") if names else ""
+    added, removed = [n for n in names if n not in prev], sorted(prev - set(names))
+    if not added and not removed: return ""
+    out = f"# Secrets of project '{project}' changed (/dev/raid)\n"
+    if added: out += f"Added: {', '.join(added)}.\n"
+    if removed: out += f"Removed: {', '.join(removed)}.\n"
+    return out + (f"{SECRET_HOWTO}\n" if added else "")
 
 def redact(text, values):
     for v in sorted(values, key=len, reverse=True):
