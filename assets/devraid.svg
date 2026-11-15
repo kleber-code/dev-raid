@@ -6,7 +6,7 @@
   </defs>
   <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
   <rect x="8.5" y="8.5" width="239" height="239" rx="53.5" fill="none" stroke="#45475a" stroke-opacity=".6"/>
-  <!-- três painéis empilhados: o "raid" -->
+  <!-- three stacked panes: the "raid" -->
   <rect x="44" y="60"  width="168" height="38" rx="11" fill="#cba6f7"/>
   <rect x="44" y="109" width="168" height="38" rx="11" fill="#89b4fa"/>
   <rect x="44" y="158" width="168" height="38" rx="11" fill="#a6e3a1"/>
