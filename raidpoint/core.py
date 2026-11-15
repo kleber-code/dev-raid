@@ -27,6 +27,8 @@ CONFIG_DEFAULT = {
                  "accent": "Theme default", "cursor": "Block", "cursor_blink": False},
     "window": {"sidebar_width": 190},
     "updates": {"auto": True},
+    # the AI you chat with: "claude-code" (headless Claude Code) or "http" (see docs/orchestrator.md)
+    "orchestrator": {"provider": "claude-code", "url": "", "token_file": "", "token_env": ""},
     # GTK format: "<Control>d", "<Control><Shift>p"...  ("" disables)
     "keys": {
         "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
