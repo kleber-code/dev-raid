@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **Plugins:** out-of-process MCP plugins in `~/.raid_point/plugins/<name>/plugin.toml`, merged into `raidpoint mcp` as
+  `<plugin>__<tool>`. Off until enabled (`raidpoint plugin enable`), tied to the manifest hash, minimal environment, approval for
+  every non-read-only call, untrusted-output fencing. See `docs/plugins.md` and `examples/plugins/hello`.
 - **English everywhere:** interface, CLI, installer, website and docs are now in English. The guide moved to
   `guide.html` (the old `guia.html` redirects).
 - **Automatic updates:** `devraid update` (or `raidpoint update`; `--check` only checks). The app checks every few hours:

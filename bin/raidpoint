@@ -16,10 +16,11 @@
   raidpoint transcript <file> [-f]
   raidpoint install              register hooks + MCP in Claude Code and Codex
   raidpoint update [--check]     update /dev/raid (--check: only report whether an update exists)
+  raidpoint plugin ls | info|enable|disable|tools <name>   manage MCP plugins (~/.raid_point/plugins)
 """
-import json, os, sys, time, shutil, subprocess
+import atexit, json, os, sys, time, shutil, subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
-from raidpoint import core
+from raidpoint import core, plugins
 
 SELF = os.path.realpath(__file__)
 SHELLS = {"sh", "bash", "zsh", "fish", "dash", "nu"}
@@ -178,6 +179,15 @@ TOOLS = {
                              "purpose": {"type": "string"}}, ["command", "secrets"]), t_run_with_secrets),
 }
 
+_HOST = None
+def _host():
+    """enabled plugins (started on first use; closed when the MCP server exits)"""
+    global _HOST
+    if _HOST is None:
+        _HOST = plugins.Host(); _HOST.load()
+        atexit.register(_HOST.close)
+    return _HOST
+
 def cmd_mcp():
     def send(o): sys.stdout.write(json.dumps(o, ensure_ascii=False) + "\n"); sys.stdout.flush()
     for line in sys.stdin:
@@ -194,9 +204,11 @@ def cmd_mcp():
                 send({"jsonrpc": "2.0", "id": i, "result": {}})
             elif meth == "tools/list":
                 send({"jsonrpc": "2.0", "id": i, "result": {"tools": [
-                    {"name": n, "description": d, "inputSchema": sc} for n, (d, sc, _) in TOOLS.items()]}})
+                    {"name": n, "description": d, "inputSchema": sc} for n, (d, sc, _) in TOOLS.items()] + _host().list_tools()}})
             elif meth == "tools/call":
                 n, a = params.get("name"), params.get("arguments") or {}
+                if n not in TOOLS and n in _host().index:       # plugin tool: already an MCP result
+                    send({"jsonrpc": "2.0", "id": i, "result": _host().call(n, a)}); continue
                 try:
                     if n not in TOOLS: raise ValueError(f"unknown tool: {n}")
                     res = TOOLS[n][2](a); err = False
@@ -209,6 +221,44 @@ def cmd_mcp():
         except Exception as e:                                   # never takes the server down
             if i is not None:
                 send({"jsonrpc": "2.0", "id": i, "error": {"code": -32603, "message": f"internal error: {e}"}})
+
+# ------------------------------------------------------------------ plugins
+def cmd_plugin(a):
+    sub, name = (a + ["", ""])[:2]
+    if sub in ("ls", "list", ""):
+        found = plugins.discover()
+        if not found: print(f"no plugins (put them in {plugins.PLUGINS}/<name>/plugin.toml)"); return
+        for s in found:
+            print(f"{s['name']:<20} {s['state']:<9} {s.get('version', ''):<8} {s.get('description') or s.get('error', '')}")
+        return
+    try:
+        if sub == "info":
+            s = plugins.status(name)
+            if s["state"] == "invalid": sys.exit(f"{name}: {s['error']}")
+            print(f"{s['name']} {s['version']} [{s['state']}]\n{s['description']}\ncommand:     {' '.join(s['command'])}"
+                  f"\npermissions: {', '.join(s['permissions']) or '(none declared)'}"
+                  f"\nenv:         {', '.join(s['env_passthrough']) or '(none passed through)'}\nsha256:      {s['hash']}")
+        elif sub == "enable":
+            s = plugins.status(name)
+            if s["state"] == "invalid": sys.exit(f"{name}: {s['error']}")
+            print(f"Enabling '{name}' lets /dev/raid RUN this command on your machine, with your user's privileges:\n"
+                  f"  {' '.join(s['command'])}\npermissions: {', '.join(s['permissions']) or '(none declared)'}\n"
+                  f"env passed through: {', '.join(s['env_passthrough']) or '(none)'}")
+            if "--yes" not in a and input("Enable this plugin? [y/N] ").strip().lower() != "y": sys.exit("aborted")
+            plugins.enable(name); print(f"enabled {name}")
+        elif sub == "disable":
+            plugins.disable(name); print(f"disabled {name}")
+        elif sub == "tools":
+            h = plugins.Host(only=name); h.load()
+            try:
+                if name not in h.clients: sys.exit(f"{name}: not running ({h.errors.get(name, 'not enabled')})")
+                for full, (_, t) in h.index.items():
+                    ro = (t.get("annotations") or {}).get("readOnlyHint")
+                    print(f"{full:<40} {'read-only' if ro else 'asks approval':<14} {(t.get('description') or '')[:70]}")
+            finally: h.close()
+        else: print(__doc__)
+    except plugins.PluginError as e:
+        sys.exit(f"{name}: {e}")
 
 # ------------------------------------------------------------------ helper CLI
 def cmd_mem(a):
@@ -385,6 +435,7 @@ def main():
             print("codex credits:", "unlimited" if cr.get("unlimited") else (cr.get("balance") if cr.get("has_credits") else "no extra credits"))
         print("\nper project (7d):")
         for p, n in sorted(S["7d"]["by_project"].items(), key=lambda x: -x[1])[:8]: print(f"  {p:<24} {f(n):>7}")
+    elif c == "plugin": cmd_plugin(a[1:])
     elif c == "events":
         for e in core.read_events()[-30:]: print(time.strftime("%H:%M:%S", time.localtime(e["ts"])), e.get("event"), e.get("project"), e.get("agent_type") or "", e.get("session_id", "")[:8])
     elif c in ("-h", "--help", "help", ""): print(__doc__)
