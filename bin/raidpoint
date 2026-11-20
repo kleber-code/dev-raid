@@ -17,6 +17,7 @@
   raidpoint transcript <file> [-f]
   raidpoint install              register hooks + MCP in Claude Code and Codex
   raidpoint update [--check]     update /dev/raid (--check: only report whether an update exists)
+  raidpoint agents-md [project] [--remove]   add/refresh a managed /dev/raid block in <project>/AGENTS.md (opt-in: edits the repo)
   raidpoint doctor [--fix]       health check (tools, config, keyring, Claude Code hooks/MCP paths); --fix repairs what it can
   raidpoint plugin ls | info|enable|disable|tools <name>   manage MCP plugins (~/.raid_point/plugins)
 """
@@ -44,13 +45,10 @@ def cmd_hook():
                         "agent_transcript": d.get("agent_transcript_path"),
                         "prompt": (d.get("prompt") or "")[:80] if ev == "UserPromptSubmit" else None,
                         "message": (d.get("message") or "")[:200] if ev == "Notification" else None})
-        if ev == "SessionStart" and proj:
-            mems = core.mem_recent(proj, 8)
-            if mems:
-                print(f"# Memory of project '{proj}' (/dev/raid)\n"
-                      "Use the MCP tools raidpoint.memory_search / memory_add to look up and record decisions.\n")
-                for m in mems:
-                    print(f"- [{m['kind']}] {m['text'][:240]}")
+        if ev == "SessionStart" and proj and d.get("source") != "resume":      # on resume the conversation already has it
+            print(core.briefing(proj))                                          # context + tools + memory (secrets come right below)
+        if ev == "SessionEnd" and proj:
+            core.mem_session_log(proj, d.get("session_id"))                     # automatic project log, so the memory is never empty
         if ev in ("SessionStart", "UserPromptSubmit") and proj:
             note = core.secret_announcement(d.get("session_id"), proj, ev)     # names only; on prompts, only changes
             if note: print(note)
@@ -145,6 +143,8 @@ def cmd_plugin(a):
 def cmd_mem(a):
     sub = a[0] if a else ""
     if sub == "reindex": core.mem_reindex(); print("ok"); return
+    if sub == "backfill":
+        res = core.mem_backfill(); print("\n".join(f"{p}: {n} session(s) added" for p, n in res.items()) or "nothing to add"); return
     proj = a[1] if len(a) > 1 else core.project_for_cwd(os.getcwd())
     if not proj: sys.exit("no project: run inside a project folder or pass its name (raidpoint mem <add|search|recent> <project> ...)")
     if sub == "add": print(core.mem_add(proj, " ".join(a[2:])))
@@ -153,6 +153,14 @@ def cmd_mem(a):
     elif sub == "recent":
         for m in core.mem_recent(proj): print(f"[{m['kind']}] {m['ts']}  {m['text'][:200]}")
     else: print(__doc__)
+
+def cmd_agents_md(a):
+    remove = "--remove" in a; rest = [x for x in a if not x.startswith("--")]
+    proj = rest[0] if rest else core.project_for_cwd(os.getcwd())
+    if not proj: sys.exit("no project: run inside a project folder or pass its name")
+    path, err = core.write_agents_md(proj, remove=remove)
+    if err: sys.exit(err)
+    print(("removed the /dev/raid block from " if remove else "wrote the /dev/raid block in ") + path)
 
 def cmd_secret(a):
     import getpass
@@ -417,6 +425,7 @@ def main():
     elif c == "transcript": cmd_transcript(a[1:])
     elif c == "install": cmd_install()
     elif c == "doctor": cmd_doctor(a[1:])
+    elif c == "agents-md": cmd_agents_md(a[1:])
     elif c == "update":
         r = core.check_update(apply="--check" not in a)
         print(f"[{r['status']}] {r['msg']}"); sys.exit(1 if r["status"] == "error" else 0)

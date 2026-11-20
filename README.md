@@ -58,6 +58,25 @@ both ready but **not published yet**. By hand: `sudo make install PREFIX=/usr/lo
 
 Dependencies: Python 3.11+, GTK4, VTE 3.91 with PyGObject, tmux, `gh`, libsecret; `mosh` is optional.
 
+## What an agent is told when it starts, and project memory
+
+Every new agent session starts with a **briefing**: where it is, the project context (branch, changes, last commits, docs worth
+reading), the **tools** it has in /dev/raid (the MCP server `raidpoint`: projects, agents, memory, secrets by name, CI, usage),
+the project **memory**, and the rule for recording new memories.
+
+- **Claude Code** gets it through the `SessionStart` hook (not on `resume`, where the conversation already has it).
+- **Codex, Gemini, opencode** opened from /dev/raid get a first prompt pointing at the briefing file
+  (`~/.raid_point/data/briefing/<project>.md`); **Aider** gets it with `--read`. Remote projects and plain shells are left alone.
+- See exactly what an agent will be told: palette → *Project: show what agents are told at start*.
+- `raidpoint agents-md [project]` (palette: *Project: write AGENTS.md…*) adds a managed block to `<project>/AGENTS.md`, for any
+  agent that reads that file even outside /dev/raid. It is opt-in because it edits your repo; `--remove` takes it out again.
+
+**Memory** is markdown in `~/.raid_point/data/memory/<project>/` with a full-text index. Agents rarely record anything on their own,
+so /dev/raid also keeps an **automatic log**: when a session ends it stores what was asked, the commits made and how many files are
+changed (facts only, no model involved). `raidpoint mem backfill` turns the sessions already in the event log into entries (it skips
+live ones and never repeats). Decisions and bug causes are written by the agent through `memory_add`, following the briefing.
+`raidpoint mem search|recent|add <project> …` works from the terminal.
+
 ## As your everyday terminal
 
 Use /dev/raid like Alacritty, but with panes, tabs and persistent sessions:

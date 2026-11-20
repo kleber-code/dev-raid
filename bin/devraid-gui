@@ -571,7 +571,8 @@ class App(Gtk.Application):
         return False
 
     def add_agent(self, ag, worktree=False):
-        self.add_pane(ag["name"], ag["cmd"], worktree)
+        cmd, _ = core.agent_launch_cmd(ag, "", project=self.cur)       # agents without hooks are pointed at the project briefing
+        self.add_pane(ag["name"], cmd, worktree)
 
     def toggle_sync(self):
         if not self.cur: return
@@ -767,6 +768,8 @@ class App(Gtk.Application):
         add("Orchestrator: chat", "Ctrl+Shift+K", self.toggle_chat)
         add("Project list: show/hide", "Ctrl+B", self.toggle_side)
         add("Project secrets…", "", self.on_secrets)
+        add("Project: write AGENTS.md…", "briefing for every agent", self.on_agents_md)
+        add("Project: show what agents are told at start", "briefing + memory", self.show_briefing)
         add("Project: rename…", "F2 in the list", self.on_rename)
         add("Project: remove…", "Delete in the list", self.on_remove)
         add("Agents: edit / rename / delete…", "Settings → Agents", lambda: self.on_settings(page="agents"))
@@ -841,7 +844,7 @@ class App(Gtk.Application):
             (a for a in ags if os.path.basename((shlex.split(a["cmd"]) or [""])[0]) in core.PROMPT_ARG), None)
         if not ag:
             Gtk.AlertDialog(message="No agent to orchestrate", detail="Add Claude (or another agent that accepts an initial task) in Settings → Agents.").show(self.win); return
-        cmd, _ = core.agent_launch_cmd(ag, core.ORCHESTRATOR_PROMPT)
+        cmd, _ = core.agent_launch_cmd(ag, core.ORCHESTRATOR_PROMPT, self.cur)
         proj = self.cur
         def work():
             pid, d, err = core.spawn_pane(proj, "Orchestrator", cmd, False, self.layout)
@@ -2207,6 +2210,33 @@ class App(Gtk.Application):
                 self.cur = None; self.stack.set_visible_child_name("_empty"); self.title_lbl.set_label("/dev/raid")
             self.refresh_list()
         dlg.choose(self.win, None, done)
+
+    def on_agents_md(self, *_):
+        name = self.cur
+        if not name: return
+        if load().get(name, {}).get("host"):
+            Gtk.AlertDialog(message="Remote project", detail="AGENTS.md is written in a local folder.").show(self.win); return
+        dlg = Gtk.AlertDialog(message="Write AGENTS.md?",
+                              detail=f"Adds (or refreshes) a block between <!-- devraid --> markers in {pdir(name)}/AGENTS.md "
+                                     "explaining the /dev/raid tools and the memory protocol, for ANY agent that reads AGENTS.md "
+                                     "(Codex and others). The rest of the file is untouched. It is a change in your repo: commit it if you want it shared.",
+                              buttons=["Cancel", "Write"], cancel_button=0, default_button=1)
+        def done(d, res):
+            try:
+                if d.choose_finish(res) != 1: return
+            except GLib.Error: return
+            path, err = core.write_agents_md(name)
+            Gtk.AlertDialog(message="Done" if not err else "Could not write", detail=path or err).show(self.win)
+        dlg.choose(self.win, None, done)
+
+    def show_briefing(self, *_):
+        if not self.cur: return
+        w = Gtk.Window(title=f"Briefing — {self.cur}", transient_for=self.win, default_width=720, default_height=560)
+        tv = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD, left_margin=14, right_margin=14, top_margin=12)
+        tv.get_buffer().set_text(core.briefing(self.cur, secrets=True))
+        sc = Gtk.ScrolledWindow(); sc.set_child(tv); w.set_child(sc)
+        kc = Gtk.EventControllerKey(); kc.connect("key-pressed", lambda c, kv, kcode, st: (w.close(), True)[1] if kv == Gdk.KEY_Escape else False)
+        w.add_controller(kc); w.present()
 
     def on_rename(self, *_, name=None):
         name = name or self.cur

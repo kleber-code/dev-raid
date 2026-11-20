@@ -73,7 +73,7 @@ def t_spawn_agent(a):
     if not ag: raise ValueError(f"unknown agent; options: {[x['name'] for x in core.agents_cfg()]}")
     if not ag["cmd"] and not core.ask_approval("spawn", p, "Open a plain SHELL pane"):
         return {"error": "denied by the user"}
-    cmd, keys = core.agent_launch_cmd(ag, a.get("prompt") or "")
+    cmd, keys = core.agent_launch_cmd(ag, a.get("prompt") or "", p)
     pid, d, err = core.spawn_pane(p, ag["name"], cmd, bool(a.get("worktree")))
     if not pid: return {"error": err or "could not create the pane (is the project session open in /dev/raid?)"}
     if keys:

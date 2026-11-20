@@ -452,15 +452,29 @@ def open_in_tmux_fm(project, cwd=None, layout="tiled", cfg=None, wt_label=None):
 # ---------------------------------------------------------------- orchestration
 PROMPT_ARG = {"claude", "codex", "gemini", "cursor-agent", "opencode"}   # CLIs that accept the task as an initial argument
 
-def agent_launch_cmd(ag, prompt=""):
+def agent_launch_cmd(ag, prompt="", project=None):
     """(command, needs_send_keys). Claude/Codex & co. get the task as an argument (reliable);
-    the others start empty and the task is sent via send-keys afterwards. A preset can force it with "prompt": "arg"|"keys"."""
+    the others start empty and the task is sent via send-keys afterwards. A preset can force it with "prompt": "arg"|"keys".
+    With `project`, an agent WITHOUT hooks (Codex, Gemini, Aider...) is pointed at the project briefing; Claude Code gets it
+    through the SessionStart hook instead."""
     cmd = (ag.get("cmd") or "").strip()
-    if not cmd or not prompt: return cmd, False
+    if not cmd: return cmd, False
     mode = ag.get("prompt")
     try: first = os.path.basename(shlex.split(cmd)[0])
     except (ValueError, IndexError): first = ""
-    if mode == "arg" or (mode is None and first in PROMPT_ARG):
+    takes_arg = mode == "arg" or (mode is None and first in PROMPT_ARG)
+    if project and first != "claude" and not load_projects().get(project, {}).get("host"):
+        try:
+            f = write_briefing(project)
+            if first == "aider": cmd = f"{cmd} --read {shlex.quote(str(f))}"      # read-only context file
+            elif takes_arg:
+                intro = (f"You are running inside /dev/raid. First read {f} (the project briefing: your tools, the project context "
+                         "and its memory)")
+                prompt = intro + (f", then do this task:\n\n{prompt}" if prompt else ", then wait for my instructions.")
+        except Exception:
+            pass                                                  # a briefing problem must never block opening the agent
+    if not prompt: return cmd, False
+    if takes_arg:
         return f"{cmd} {shlex.quote(prompt)}", False
     return cmd, True
 
@@ -473,7 +487,7 @@ def run_task(project, prompt, agents, worktree=True, layout="tiled"):
         ag = presets.get(name.lower())
         if not ag or not ag.get("cmd"):
             out.append({"agent": name, "pane": None, "dir": None, "error": "unknown preset or preset without a command"}); continue
-        cmd, keys = agent_launch_cmd(ag, prompt)
+        cmd, keys = agent_launch_cmd(ag, prompt, project)
         pid, d, err = spawn_pane(project, ag["name"], cmd, worktree, layout)
         if pid and keys:
             time.sleep(4)
@@ -548,8 +562,8 @@ def _mdb():
     db.execute("create virtual table if not exists mem using fts5(project, kind, tags, text, path unindexed, ts unindexed)")
     return db
 
-def mem_add(project, text, kind="note", tags=""):
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+def mem_add(project, text, kind="note", tags="", ts=None):
+    ts = ts or time.strftime("%Y-%m-%d %H:%M:%S")
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower())[:40].strip("-") or "note"
     if project != safe_name(project) and project not in load_projects():
         raise ValueError("invalid project")
@@ -587,6 +601,136 @@ def mem_recent(project, limit=8):
         rows = db.execute("select kind,tags,text,ts,path from mem where project = ? order by ts desc limit ?",
                           (project, limit)).fetchall()
     return [dict(kind=r[0], tags=r[1], text=r[2], ts=r[3], path=r[4]) for r in rows]
+
+# ---------------------------------------------------------------- session briefing (what an agent is told when it starts)
+BRIEFING_DIR = DATA / "briefing"
+MEM_PROTOCOL = (
+    "Memory protocol: when you finish a task, or learn something that will still matter next week (a decision and its reason, "
+    "the root cause of a bug, a project convention, a gotcha), record ONE short entry with `memory_add` "
+    "(kind: decision | bug | convention | note). Do not record trivia, progress chatter or secrets. "
+    "Before starting something non-trivial, `memory_search` for what is already known.")
+CLI_FALLBACK = ("If the `raidpoint` MCP tools are not available in your harness, use the CLI: "
+                "`raidpoint mem search|add|recent <project> ...`, `raidpoint secret list <project>`.")
+
+def _git_out(d, *a):
+    try: return subprocess.run(["git", "-C", d, *a], text=True, capture_output=True, timeout=10).stdout.strip()
+    except Exception: return ""
+
+def project_context(project):
+    p = load_projects().get(project, {})
+    if p.get("host"): return {"remote": True, "host": p["host"], "dir": p.get("dir") or "~"}
+    d = pdir(project); ctx = {"dir": d}
+    if d and os.path.isdir(d) and git_root(d):
+        ctx["branch"] = _git_out(d, "rev-parse", "--abbrev-ref", "HEAD")
+        ctx["dirty"] = len([l for l in _git_out(d, "status", "--porcelain").splitlines() if l])
+        ctx["commits"] = _git_out(d, "log", "-5", "--format=%h %s").splitlines()
+        ctx["origin"] = re.sub(r"//[^@/]+@", "//", _git_out(d, "remote", "get-url", "origin"))     # never leak credentials in a URL
+    ctx["docs"] = [f for f in ("README.md", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", "package.json", "pyproject.toml",
+                               "Cargo.toml", "go.mod", "Makefile", "docker-compose.yml") if d and os.path.exists(os.path.join(d, f))]
+    return ctx
+
+def _tool_lines():
+    from . import tools          # imported here: tools imports core
+    return "\n".join(f"- `{n}` — {v[0]}" for n, v in tools.TOOLS.items())
+
+def _memory_section(project):
+    recent = mem_recent(project, 40)
+    keep = [m for m in recent if m["kind"] != "session"][:6]; logs = [m for m in recent if m["kind"] == "session"][:2]
+    if not (keep or logs):
+        return "No memories recorded yet for this project: you are starting its memory. " + MEM_PROTOCOL
+    out = ["Most recent entries (search the rest with `memory_search`):"]
+    out += [f"- [{m['kind']}] {m['text'][:240].strip()}  ({m['ts'][:10]})" for m in keep + logs]
+    return "\n".join(out) + "\n\n" + MEM_PROTOCOL
+
+def briefing(project, secrets=False):
+    """markdown an agent receives when a session starts: where it is, the project context, its tools and the project memory"""
+    c = project_context(project)
+    where = (f"remote server `{c['host']}`, folder `{c['dir']}`" if c.get("remote") else f"`{c['dir']}`")
+    ctx = [f"- Folder: {where}"]
+    if c.get("branch"):
+        ctx.append(f"- Branch `{c['branch']}` · {c['dirty']} changed file(s)" + (f" · origin {c['origin']}" if c.get("origin") else ""))
+    if c.get("commits"): ctx.append("- Last commits: " + "; ".join(c["commits"]))
+    if c.get("docs"): ctx.append("- Worth reading first: " + ", ".join(c["docs"]))
+    out = [f"# /dev/raid briefing — project '{project}'",
+           "You are an AI agent running inside /dev/raid, the operational center for this machine's projects and agents. "
+           "The human sees all agents side by side and can read your panes.",
+           "", "## Project context", *ctx,
+           "", "## Your tools (MCP server `raidpoint`)", _tool_lines(), CLI_FALLBACK,
+           "Use `spawn_agent` with worktree=true for parallel work so agents never edit the same checkout. You only ever see secret "
+           "NAMES, never values; `run_with_secrets` injects them into one command after the human approves.",
+           "", "## Project memory", _memory_section(project)]
+    if secrets:
+        names = secret_names(project)
+        if names: out += ["", "## Secrets (names only)", ", ".join(names)]
+    return "\n".join(out) + "\n"
+
+def write_briefing(project):
+    BRIEFING_DIR.mkdir(parents=True, exist_ok=True)
+    f = BRIEFING_DIR / f"{safe_name(project)}.md"
+    f.write_text(briefing(project, secrets=True))
+    return f
+
+def mem_session_log(project, session_id, evs=None):
+    """automatic project log: when a session ends, record what was asked and what changed (no LLM, only facts).
+    Without this the memory stays empty, because agents rarely call memory_add on their own."""
+    if not (project and session_id) or project not in load_projects(): return None          # never log for a removed project
+    if evs is None: evs = [e for e in read_events(max_age=3 * 86400, limit=20000) if e.get("session_id") == session_id]
+    prompts = [e["prompt"] for e in evs if e.get("event") == "UserPromptSubmit" and e.get("prompt")]
+    if not prompts: return None
+    tag = session_id[:8]
+    if any(tag in (m["tags"] or "") for m in mem_recent(project, 200)): return None         # already logged
+    start, end = min(e["ts"] for e in evs), max(e["ts"] for e in evs)
+    d = pdir(project) if not load_projects().get(project, {}).get("host") else None
+    text = (f"Session {time.strftime('%Y-%m-%d', time.localtime(start))} ({dur_short(int(end - start))}, "
+            f"{len(prompts)} prompt(s)). First request: \"{prompts[0].strip()}\".")
+    if d and os.path.isdir(d) and git_root(d):
+        since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start)); until = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end + 60))
+        commits = [l for l in _git_out(d, "log", f"--since={since}", f"--until={until}", "--format=%s", "-8").splitlines() if l]
+        if commits: text += " Commits: " + "; ".join(commits) + "."
+        if time.time() - end < 3600:                  # "working tree after" only makes sense for a session that just ended
+            dirty = len([l for l in _git_out(d, "status", "--porcelain").splitlines() if l])
+            if dirty: text += f" Working tree after: {dirty} changed file(s)."
+    return mem_add(project, text, kind="session", tags=f"auto,{tag}", ts=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end)))
+
+def mem_backfill(idle_s=1800):
+    """turn the sessions already recorded in the event log into memory entries (skips live ones). Returns {project: n}"""
+    by = {}
+    for e in read_events(max_age=30 * 86400, limit=200000):
+        if e.get("session_id") and e.get("project"): by.setdefault((e["project"], e["session_id"]), []).append(e)
+    done = {}
+    for (proj, sid), es in sorted(by.items(), key=lambda kv: min(x["ts"] for x in kv[1])):
+        if time.time() - max(x["ts"] for x in es) < idle_s: continue
+        try:
+            if mem_session_log(proj, sid, es): done[proj] = done.get(proj, 0) + 1
+        except Exception: pass
+    return done
+
+AGENTS_BEGIN, AGENTS_END = "<!-- devraid:begin -->", "<!-- devraid:end -->"
+
+def agents_md_block():
+    return "\n".join([AGENTS_BEGIN, "## /dev/raid", "",
+        "This project runs inside /dev/raid. Agents opened there get a briefing (project context, tools, memory) automatically; "
+        "agents opened elsewhere should follow this.", "",
+        "### Tools (MCP server `raidpoint`)", _tool_lines(), "", CLI_FALLBACK, "",
+        "### Memory", "Start with `memory_recent` to see what is known. " + MEM_PROTOCOL, "",
+        "Secrets: you only see NAMES (`secret_names`); never ask for or print a value. Parallel agents: `spawn_agent` with worktree=true.",
+        AGENTS_END, ""])
+
+def write_agents_md(project, remove=False):
+    """add/refresh (or remove) the managed block in <project>/AGENTS.md; returns (path, error). Opt-in: it edits the repo."""
+    p = load_projects().get(project, {})
+    if p.get("host"): return None, "remote projects have no local folder"
+    d = pdir(project)
+    if not d or not os.path.isdir(d): return None, "project folder not found"
+    f = Path(d) / "AGENTS.md"; cur = f.read_text() if f.exists() else ""
+    pat = re.compile(re.escape(AGENTS_BEGIN) + r".*?" + re.escape(AGENTS_END) + r"\n?", re.S)
+    if remove:
+        new = pat.sub("", cur).rstrip("\n"); new = new + "\n" if new.strip() else ""
+    elif pat.search(cur): new = pat.sub(lambda m: agents_md_block(), cur)
+    else: new = (cur.rstrip("\n") + "\n\n" if cur.strip() else "") + agents_md_block()
+    if remove and not new: f.unlink(missing_ok=True)
+    else: f.write_text(new)
+    return str(f), None
 
 # ---------------------------------------------------------------- secrets (system keyring)
 def _st(*a, inp=None):
