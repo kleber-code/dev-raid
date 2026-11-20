@@ -112,7 +112,7 @@ make uninstall PREFIX=/usr/local</code></pre>
 
 <h2 id="getting-started">First steps</h2>
 <ol>
-<li>Open <code>devraid</code>. Click <strong>＋ New project</strong> and pick a folder that is a git repository (or use the <strong>Repos</strong> tab to clone one from GitHub).</li>
+<li>Open <code>devraid</code>. Click <strong>＋ New project</strong> and pick a folder that is a git repository (or choose <strong>GitHub repository…</strong> to clone one).</li>
 <li>Click <strong>＋ Agent</strong> (or <kbd>Ctrl</kbd>+<kbd>D</kbd>) and choose <em>Agent: Claude</em>. A pane opens with the agent running in the project folder.</li>
 <li>Open another agent next to it — say <em>Agent: Codex in isolated worktree</em> — and split the screen with <kbd>Alt</kbd>+<kbd>\</kbd> or <kbd>Alt</kbd>+<kbd>-</kbd>.</li>
 <li>When an agent is done, press <kbd>Ctrl</kbd>+<kbd>G</kbd> to see what changed and commit.</li>
@@ -131,12 +131,12 @@ make uninstall PREFIX=/usr/local</code></pre>
 </table>
 
 <h2 id="projects">Projects and repos</h2>
-<p>The sidebar has two tabs:</p>
+<p>The sidebar has two tabs. To add a project, use <strong>＋ New project</strong>: a <strong>GitHub repository</strong> (account and organizations via <code>gh</code>; it is <strong>cloned</strong> into <code>~/.raid_point/workspaces/&lt;repo&gt;</code>), a <strong>local folder</strong> or an <strong>SSH/mosh server</strong>.</p>
 <ul>
 <li><strong>Projects</strong> — what you're working on. A green dot means the session is alive. A badge shows the agents' state: <code>!</code> needs attention, <code>…</code> working, <code>✓</code> done, <code>✗</code> failed.</li>
-<li><strong>Repos</strong> — all your GitHub repositories (account and organizations), via <code>gh</code>. Opening a repo <strong>clones</strong> it into <code>~/.raid_point/workspaces/&lt;repo&gt;</code> and turns it into a project.</li>
+<li><strong>Sessions</strong> — the live tmux sessions. The dot shows green (open in a window), yellow (running in the background) or grey (idle: only shells). Each row shows tabs, what is running and how long ago. <strong>✕</strong> kills a session (it warns if something is still running); <strong>Clean up…</strong> lists the idle ones so you pick what to kill; an <em>orphan</em> session (no project) is adopted as a project with a click.</li>
 </ul>
-<p>Projects must be git repositories: that's what makes worktrees, diffs and PRs possible. To remove a project, use the palette (<em>Project: remove…</em>). The app asks first and <strong>closes that project's terminals</strong>; the folder and its files are not deleted.</p>
+<p>Projects must be git repositories: that's what makes worktrees, diffs and PRs possible. To rename or remove a project, right-click it (or <code>F2</code> / <code>Delete</code>). The app asks first and <strong>closes that project's terminals</strong>; the folder and its files are not deleted.</p>
 <p>The window title shows the branch, how many files are modified, the open PR and the state of the CI checks.</p>
 
 <h2 id="panes">Panes and layouts</h2>

@@ -10,3 +10,8 @@ Categories=Development;TerminalEmulator;
 Keywords=terminal;tmux;ai;agents;claude;codex;aider;
 StartupWMClass=br.com.satela.DevRaid
 StartupNotify=true
+Actions=new-terminal;
+
+[Desktop Action new-terminal]
+Name=New terminal
+Exec=@BIN@/devraid here

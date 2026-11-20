@@ -14,6 +14,8 @@ RAIDPOINT = os.path.join(_HERE, "raidpoint")
 TMUX = core.TMUX
 URL_RE = (r"(?:https?|ftp)://[^\s<>\"'`]+[^\s<>\"'`.,;:!?)\]}]|"
           r"www\.[^\s<>\"'`]+[^\s<>\"'`.,;:!?)\]}]")
+FILE_RE = (r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+(?::\d+(?::\d+)?)?|"
+           r"\b[A-Za-z0-9_.-]+\.(?:py|js|ts|tsx|jsx|rs|go|c|h|cpp|sh|json|toml|yaml|yml|md|html|css|sql)(?::\d+(?::\d+)?)?")
 PALETTE = ["#cba6f7", "#89b4fa", "#a6e3a1", "#f9e2af", "#fab387", "#f38ba8", "#94e2d5", "#74c7ec"]
 
 load = core.read_projects
@@ -62,6 +64,9 @@ headerbar menubutton.sync-on > button { background: #f9e2af; color: #1e1e2e; }
 .new-btn:hover { background: #1e1e2e; color: #cdd6f4; border-color: #cba6f7; }
 
 .dot-remote { color: #89b4fa; font-size: 8px; }
+.dot-busy { color: #f9e2af; font-size: 8px; }
+.link-btn { color: #a6adc8; font-size: 11px; padding: 0 6px; min-height: 0; min-width: 0; }
+.link-btn:hover { color: #cdd6f4; }
 .side-right { background: #181825; border-left: 1px solid #11111b; }
 .ag-sec { color: #6c7086; font-size: 10px; font-weight: bold; letter-spacing: 1.5px; padding: 10px 6px 2px 6px; }
 .ag-row { font-size: 12px; }
@@ -115,13 +120,61 @@ def git_summary(d, pr_cache, key):
 
 class App(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id=os.environ.get("RAIDPOINT_APPID", "br.com.satela.DevRaid"))
+        super().__init__(application_id=os.environ.get("RAIDPOINT_APPID", "br.com.satela.DevRaid"),
+                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.terms, self.rows, self.cur = {}, {}, None
         self.cfg = core.load_config()
         self.rebuild_binds()
         try: self.zoom = float(load().get("_zoom", 1.0))
         except Exception: self.zoom = 1.0
-        self._spawn_t = {}; self._respawn = set(); self._cloning = set(); self._av_css = set()
+        self._spawn_t = {}; self._respawn = set(); self._cloning = set(); self._av_css = set(); self._upd_asked = set()
+
+    def do_command_line(self, cl):
+        """`devraid here [dir]` / `devraid ssh <host>` reach the running instance (single instance via D-Bus)"""
+        args = cl.get_arguments()[1:]
+        here = ssh = None
+        if args[:1] == ["--here"]:
+            here = args[1] if len(args) > 1 else ""
+            if not os.path.isabs(here): here = os.path.join(cl.get_cwd() or os.path.expanduser("~"), here)
+        elif args[:1] == ["--ssh"] and len(args) > 1:
+            ssh = args[1]
+        self.activate()
+        if here: self.open_here(here)
+        if ssh: self.open_ssh(ssh)
+        return 0
+
+    def open_here(self, path):
+        """terminal in a folder, synced with the projects: the project's own session if the folder is the project
+        (or inside it: a new tab opens there); otherwise a persistent terminal session registered without git"""
+        path = os.path.realpath(os.path.expanduser(path))
+        if not os.path.isdir(path): path = os.path.expanduser("~")
+        db = load(); best = None
+        for n, p in db.items():
+            if not isinstance(p, dict) or p.get("host") or not p.get("dir"): continue
+            d = os.path.realpath(os.path.expanduser(p["dir"]))
+            if path == d or path.startswith(d.rstrip("/") + "/"):
+                if best is None or len(d) > len(best[1]): best = (n, d)
+        name = best[0] if best else None
+        if not name:
+            home = os.path.expanduser("~")
+            name = core.unique_name(core.safe_name("home" if path == home else (os.path.basename(path) or "root")), taken_dir=path)
+            setp(lambda d: d.__setitem__(name, {"dir": path, "startup": [], "term": True}))
+            self.refresh_list()
+        self.tab_proj.set_active(True)
+        self.open(name); self.win.present()
+        if best and path != best[1]:        # subfolder of a project: new tab in it
+            GLib.timeout_add(900, lambda: (threading.Thread(target=lambda: core.run_tmux(
+                name, "new-window", "-t", core.tgt(name), "-c", path), daemon=True).start(), False)[1])
+
+    def open_ssh(self, target):
+        """connect to a server (alias from ~/.ssh/config or user@host): a remote project with a persistent session"""
+        name = next((n for n, p in load().items() if isinstance(p, dict) and p.get("host") == target), None)
+        if not name:
+            name = core.unique_name(core.safe_name(target.split("@")[-1]))
+            reg = {"dir": "", "host": target, "transport": "ssh", "startup": []}
+            setp(lambda d: d.__setitem__(name, reg)); self.refresh_list()
+        self.tab_proj.set_active(True)
+        self.open(name); self.win.present()
 
     def do_activate(self):
         if getattr(self, "win", None):          # app already open: just raise the window (don't duplicate window and timers)
@@ -170,6 +223,8 @@ class App(Gtk.Application):
         hb.pack_end(action_btn("sidebar-show-right-symbolic", "Agents panel (Ctrl+J)", lambda *_: self.toggle_agents()))
         hb.pack_end(action_btn("mail-message-new-symbolic", "Chat with the orchestrator (Ctrl+Shift+K)", lambda *_: self.toggle_chat()))
         hb.pack_end(action_btn("document-edit-symbolic", "Changes and commit (Ctrl+G)", lambda *_: self.on_changes()))
+        hb.pack_end(action_btn("text-x-generic-symbolic", "Open code editor — nvim/micro (Ctrl+E)", lambda *_: self.open_editor()))
+        hb.pack_end(action_btn("folder-symbolic", "Navigate files — ranger/nnn (Ctrl+Shift+F)", lambda *_: self.open_file_manager()))
         self.win.set_titlebar(hb)
 
         # --- sidebar (fixed width, does not expand)
@@ -178,22 +233,35 @@ class App(Gtk.Application):
         t = Gtk.Label(label="PROJECTS", xalign=0, margin_start=16, margin_top=14, margin_bottom=8)
         t.add_css_class("side-title")
         self.list = Gtk.ListBox(); self.list.add_css_class("rp-list")
-        self.list.connect("row-activated", lambda lb, r: self.open(r.name))
+        self.list.connect("row-activated", lambda lb, r: getattr(r, "name", None) and self.open(r.name))
+        gp = Gtk.GestureClick(button=3)
+        def side_right(g, n, x, y):
+            row = self.list.get_row_at_y(int(y))
+            if row is not None and hasattr(row, "name"): g.set_state(Gtk.EventSequenceState.CLAIMED); self.project_menu(row, x, y)
+        gp.connect("pressed", side_right); self.list.add_controller(gp)
+        kp = Gtk.EventControllerKey()
+        def side_key(c, kv, kcode, st):
+            row = self.list.get_selected_row()
+            if row is None or not hasattr(row, "name"): return False
+            if kv == Gdk.KEY_F2: self.on_rename(name=row.name); return True
+            if kv == Gdk.KEY_Delete: self.on_remove(name=row.name); return True
+            return False
+        kp.connect("key-pressed", side_key); self.list.add_controller(kp)
         sc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
         sc.set_child(self.list); sc.set_overlay_scrolling(False)
         new_btn = Gtk.Button(label="＋  New project"); new_btn.add_css_class("new-btn")
         self.addpop = Gtk.Popover(); self.addpop.set_parent(new_btn)
         ac = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=6, margin_bottom=6,
                      margin_start=6, margin_end=6)
-        for label, cb in [("Local folder…", self.on_add), ("SSH / mosh server…", self.on_add_remote)]:
+        for label, cb in [("GitHub repository…", self.on_add_github), ("Local folder…", self.on_add), ("SSH / mosh server…", self.on_add_remote)]:
             b = Gtk.Button(label=label, has_frame=False); b.get_child().set_xalign(0); b.add_css_class("pop-item")
             b.connect("clicked", lambda _b, c=cb: (self.addpop.popdown(), c()))
             ac.append(b)
         self.addpop.set_child(ac)
         new_btn.connect("clicked", lambda *_: self.addpop.popup())
-        # tabs: Projects (what you work on) | Repos (all git repositories)
+        # tabs: Projects (what you work on) | Sessions (live tmux sessions: control and kill)
         b1 = Gtk.ToggleButton(label="Projects", active=True, hexpand=True); b1.add_css_class("tab")
-        b2 = Gtk.ToggleButton(label="Repos", group=b1, hexpand=True); b2.add_css_class("tab")
+        b2 = Gtk.ToggleButton(label="Sessions", group=b1, hexpand=True); b2.add_css_class("tab")
         tabs = Gtk.Box(spacing=2); tabs.add_css_class("tabs"); tabs.append(b1); tabs.append(b2)
         self.rlist = Gtk.ListBox(); self.rlist.add_css_class("rp-list")
         self.rlist.connect("row-activated", lambda lb, r: self.open_repo(r.repo))
@@ -207,16 +275,34 @@ class App(Gtk.Application):
         rf = Gtk.Button(icon_name="view-refresh-symbolic", has_frame=False, tooltip_text="Refresh from GitHub", margin_end=8)
         rf.connect("clicked", lambda *_: self.refresh_repos(True)); rh.append(self.rcount); rh.append(rf)
         rbox.append(self.search); rbox.append(rh); rbox.append(rsc)
-        self.sstack = Gtk.Stack(vexpand=True); self.sstack.add_named(sc, "proj"); self.sstack.add_named(rbox, "repo")
+        self._rbox = rbox                    # repo picker: shown in the "Add from GitHub" dialog, not in the sidebar
+        self.slist = Gtk.ListBox(); self.slist.add_css_class("rp-list"); self.slist.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.slist.connect("row-activated", lambda lb, r: getattr(r, "sinfo", None) and self.session_open(r.sinfo))
+        gs = Gtk.GestureClick(button=3)
+        def sess_right(g, n, x, y):
+            row = self.slist.get_row_at_y(int(y))
+            if row is not None and getattr(row, "sinfo", None): g.set_state(Gtk.EventSequenceState.CLAIMED); self.session_menu(row, x, y)
+        gs.connect("pressed", sess_right); self.slist.add_controller(gs)
+        ssc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER); ssc.set_child(self.slist); ssc.set_overlay_scrolling(False)
+        self.scount = Gtk.Label(label="", xalign=0, hexpand=True, margin_start=14, margin_top=8, margin_bottom=4, ellipsize=Pango.EllipsizeMode.END, max_width_chars=1)
+        self.scount.add_css_class("ag-sub")
+        self.clean_btn = Gtk.Button(label="Clean up…", has_frame=False, margin_end=8, margin_top=4,
+                                    tooltip_text="Choose idle sessions (only shells, nobody attached) to kill")
+        self.clean_btn.add_css_class("link-btn")
+        self.clean_btn.connect("clicked", lambda *_: self.sessions_cleanup())
+        sh = Gtk.Box(); sh.append(self.scount); sh.append(self.clean_btn)
+        sbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL); sbox.append(sh); sbox.append(ssc)
+        self._sinfos = []; self._ssig = None
+        self.sstack = Gtk.Stack(vexpand=True); self.sstack.add_named(sc, "proj"); self.sstack.add_named(sbox, "sess")
         def tab(btn, name):
             def f(b):
                 if b.get_active():
                     self.sstack.set_visible_child_name(name)
-                    if name == "repo": self.refresh_repos()
+                    if name == "sess": self.sessions_refresh()
             btn.connect("toggled", f)
-        tab(b1, "proj"); tab(b2, "repo")
-        self.tab_proj = b1; self.repos = []; self._repos_ts = 0
-        if os.environ.get("RAIDPOINT_TAB") == "repos": b2.set_active(True)
+        tab(b1, "proj"); tab(b2, "sess")
+        self.tab_proj = b1; self.tab_sess = b2; self.repos = []; self._repos_ts = 0
+        if os.environ.get("RAIDPOINT_TAB") in ("sessions", "sess"): b2.set_active(True)
         self.side.append(tabs); self.side.append(self.sstack); self.side.append(new_btn)
 
         # --- terminals
@@ -249,15 +335,22 @@ class App(Gtk.Application):
         self.add_action(a2)
         a6 = Gio.SimpleAction.new("chat", None); a6.connect("activate", lambda *_: self.toggle_chat())
         self.add_action(a6)
+        a7 = Gio.SimpleAction.new("editor", None); a7.connect("activate", lambda *_: self.open_editor())
+        self.add_action(a7)
+        a9 = Gio.SimpleAction.new("files", None); a9.connect("activate", lambda *_: self.open_file_manager())
+        self.add_action(a9)
+        a8 = Gio.SimpleAction.new("quick_open", None); a8.connect("activate", lambda *_: self.on_quick_open())
+        self.add_action(a8)
         a4 = Gio.SimpleAction.new("palette", None); a4.connect("activate", lambda *_: self.palette(""))
         self.add_action(a4)
         a5 = Gio.SimpleAction.new("settings", None); a5.connect("activate", lambda *_: self.on_settings())
         self.add_action(a5)
         a3 = Gio.SimpleAction.new("changes", None); a3.connect("activate", lambda *_: self.on_changes())
         self.add_action(a3); self.apply_accels()
-        show = os.environ.get("RAIDPOINT_SHOW")      # development/screenshots only: changes | palette | settings | chat
+        show = os.environ.get("RAIDPOINT_SHOW")      # development/screenshots only: changes | palette | settings | chat | quick_open
         if show:
             fn = {"changes": self.on_changes, "settings": self.on_settings, "parallel": self.on_parallel, "chat": self.toggle_chat,
+                  "quick_open": self.on_quick_open,
                   "palette": lambda: self.palette(os.environ.get("RAIDPOINT_PALETTE_Q", ""))}.get(show)
             if fn: GLib.timeout_add(1500, lambda: (fn(), False)[1])
         if os.environ.get("RAIDPOINT_AGENTS"): self.rev.set_reveal_child(True)
@@ -272,13 +365,14 @@ class App(Gtk.Application):
         GLib.timeout_add_seconds(60, self.usage_tick); GLib.timeout_add_seconds(2, lambda: (self.usage_tick(), False)[1])
         GLib.timeout_add_seconds(1, self.req_tick)
         GLib.timeout_add_seconds(10, self.git_tick); GLib.timeout_add_seconds(1, lambda: (self.git_tick(), False)[1])
-        GLib.timeout_add_seconds(15, lambda: (self.update_tick(), False)[1])
+        GLib.timeout_add_seconds(3, lambda: (self.update_tick(), False)[1])      # every time the app opens
         GLib.timeout_add_seconds(1800, self.update_tick)
         ar = Gio.SimpleAction.new("restart", None); ar.connect("activate", lambda *_: self.restart())
         self.add_action(ar)
 
         self.refresh_list()
         GLib.timeout_add_seconds(3, self.tick)
+        GLib.timeout_add_seconds(3, self.sessions_tick); self.sessions_refresh()
         self.win.present()
         self.refresh_repos()
         db = load(); ns = self.names()
@@ -321,7 +415,8 @@ class App(Gtk.Application):
     def apply_accels(self):
         k = self.cfg.get("keys", {})
         for act, name in (("palette", "palette"), ("settings", "settings"), ("changes", "changes"),
-                          ("agents_panel", "agents"), ("sidebar", "side"), ("chat", "chat")):
+                          ("agents_panel", "agents"), ("sidebar", "side"), ("chat", "chat"),
+                          ("editor", "editor"), ("files", "files"), ("quick_open", "quick_open")):
             acc = k.get(act, "")
             self.set_accels_for_action(f"app.{name}", [acc] if acc else [])
 
@@ -361,11 +456,16 @@ class App(Gtk.Application):
         self.warn_projects_error()
         while (r := self.list.get_first_child()): self.list.remove(r)
         self.rows = {}; self.badges = {}; on = alive(); db = load()
+        if not self.names():
+            r = Gtk.ListBoxRow(activatable=False, selectable=False)
+            l = Gtk.Label(label="No projects yet.\n\nUse ＋ New project below: a GitHub repository, a local folder or a server.",
+                          wrap=True, xalign=0, margin_start=12, margin_end=12, margin_top=14, max_width_chars=1, hexpand=True); l.add_css_class("ag-sub")
+            r.set_child(l); self.list.append(r)
         for n in self.names():
             row = Gtk.ListBoxRow(); row.name = n
             box = Gtk.Box(spacing=10)
             av = self.avatar(n)
-            name_lbl = Gtk.Label(label=n, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+            name_lbl = Gtk.Label(label=("›_ " if db[n].get("term") else "") + n, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
             name_lbl.add_css_class("name-lbl")
             dot = Gtk.Label(label="●")
             dot.add_css_class("dot-remote" if db[n].get("host") else ("dot-on" if core.sess(n) in on else "dot-off"))
@@ -519,9 +619,39 @@ class App(Gtk.Application):
         if act == "zoom_reset": self.set_zoom(1.0); return True
         if act == "copy": self.do_copy(name); return True
         if act == "paste": term.paste_clipboard(); return True
+        alt = bool(state & Gdk.ModifierType.ALT_MASK)
+        if shift and not ctrl and not alt and keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            term.feed_child(b"\x1b\r"); return True     # Shift+Enter = newline in AI CLIs (VTE would send a plain Enter)
         if (ctrl and not shift and keyval == Gdk.KEY_Insert): self.do_copy(name); return True
         if shift and not ctrl and keyval == Gdk.KEY_Insert: term.paste_clipboard(); return True
+        if ctrl and shift and not alt and self.pane_key(name, kv): return True
         return False
+
+    PANE_KEYS = {   # Ctrl+Shift+...: panes/tabs without needing the tmux prefix (the new pane inherits the current folder)
+        Gdk.KEY_e: ("split-window", "-h", "-c", "#{pane_current_path}"),    # side by side
+        Gdk.KEY_o: ("split-window", "-v", "-c", "#{pane_current_path}"),    # below
+        Gdk.KEY_t: ("new-window", "-c", "#{pane_current_path}"),            # new tab
+        Gdk.KEY_z: ("resize-pane", "-Z"),                                    # zoom the pane
+        Gdk.KEY_Left: ("select-pane", "-L"), Gdk.KEY_Right: ("select-pane", "-R"),
+        Gdk.KEY_Up: ("select-pane", "-U"), Gdk.KEY_Down: ("select-pane", "-D"),
+    }
+
+    def pane_key(self, name, kv):
+        if kv == Gdk.KEY_w: self.close_pane_dialog(name); return True
+        cmd = self.PANE_KEYS.get(kv)
+        if not cmd: return False
+        threading.Thread(target=lambda: core.run_tmux(name, cmd[0], "-t", core.tgt(name), *cmd[1:]), daemon=True).start()
+        return True
+
+    def close_pane_dialog(self, name):
+        dlg = Gtk.AlertDialog(message="Close this pane?", detail="The process running in it will be terminated.",
+                              buttons=["Cancel", "Close pane"], cancel_button=0, default_button=0)
+        def done(d, res):
+            try:
+                if d.choose_finish(res) != 1: return
+            except GLib.Error: return
+            threading.Thread(target=lambda: core.run_tmux(name, "kill-pane", "-t", core.tgt(name)), daemon=True).start()
+        dlg.choose(self.win, None, done)
 
     def set_zoom(self, z):
         self.zoom = round(max(0.5, min(3.0, z)), 2)
@@ -545,12 +675,18 @@ class App(Gtk.Application):
         try:
             tag = term.match_add_regex(Vte.Regex.new_for_match(URL_RE, -1, 0x400), 0)  # 0x400 = PCRE2_MULTILINE
             term.match_set_cursor_name(tag, "pointer")
+            ftag = term.match_add_regex(Vte.Regex.new_for_match(FILE_RE, -1, 0x400), 0)
+            term.match_set_cursor_name(ftag, "pointer")
         except Exception as e:
             print("warning: link detection unavailable:", e, file=sys.stderr)
-        # Ctrl+click opens the link (captured before tmux/the application)
+        # Ctrl+click opens the link or file:line in the built-in editor (captured before tmux/the application)
         gl = Gtk.GestureClick(button=1); gl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         def left(g, n, x, y):
             if not (g.get_current_event_state() & Gdk.ModifierType.CONTROL_MASK): return
+            fhit = self.file_at(name, term, x, y)
+            if fhit:
+                g.set_state(Gtk.EventSequenceState.CLAIMED)
+                self.open_in_editor(fhit[0], fhit[1], fhit[2], fhit[3]); return
             u = self.link_at(term, x, y)
             if u:
                 g.set_state(Gtk.EventSequenceState.CLAIMED); self.open_uri(u)
@@ -561,13 +697,37 @@ class App(Gtk.Application):
             g.set_state(Gtk.EventSequenceState.CLAIMED); self.show_ctx(name, term, x, y)
         gr.connect("pressed", right); term.add_controller(gr)
 
+    def file_at(self, name, term, x, y):
+        """Returns (full_path, root_dir, wt_label, line_no) if a local project file is under (x, y), else None."""
+        try:
+            m = term.check_match_at(x, y)
+            m = m[0] if isinstance(m, (tuple, list)) else m
+            if not m or re.match(r"^(?:https?|ftp)://|^www\.", m): return None
+            parts = m.split(":")
+            rel = parts[0].lstrip("./")
+            line = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            p = load().get(name, {})
+            if not p or p.get("host"): return None
+            base = os.path.expanduser(p.get("dir", "~"))
+            targets = core.git_targets(base) or [("main", base)]
+            for lbl, d in targets:
+                cand = os.path.abspath(os.path.join(d, rel))
+                if os.path.isfile(cand):
+                    return (cand, d, lbl, line)
+            if os.path.isabs(parts[0]) and os.path.isfile(parts[0]):
+                return (parts[0], base, "main", line)
+        except Exception:
+            pass
+        return None
+
     def link_at(self, term, x, y):
         try:
             u = term.check_hyperlink_at(x, y)
             if u: return u
             m = term.check_match_at(x, y)
             m = m[0] if isinstance(m, (tuple, list)) else m
-            if m: return m if re.match(r"[a-z]+://", m) else "https://" + m
+            if m and re.match(r"^(?:https?|ftp)://|^www\.", m):
+                return m if re.match(r"[a-z]+://", m) else "https://" + m
         except Exception:
             pass
         return None
@@ -575,8 +735,19 @@ class App(Gtk.Application):
     # ---------- command palette (Ctrl+D): the whole app, by keyboard
     def commands(self):
         step = float(self.cfg["terminal"].get("zoom_step", 0.1))
+        ed = core.configured_editor(self.cfg)
+        fm = core.configured_file_manager(self.cfg)
         C = []
         def add(label, hint, fn): C.append((label, hint, fn))
+        add(f"File: quick open in {ed}…", "Ctrl+P", self.on_quick_open)
+        add(f"Files: navigate with {fm}", "Ctrl+Shift+F", self.open_file_manager)
+        add(f"Editor: open {ed}", "Ctrl+E", self.open_editor)
+        if self.cur:
+            p_ = load().get(self.cur, {})
+            if p_ and not p_.get("host"):
+                for lbl, wt_d in core.git_targets(os.path.expanduser(p_.get("dir", "~")))[1:]:
+                    add(f"Files: navigate worktree {lbl} in {fm}", "worktree", lambda d=wt_d, l=lbl: self.open_file_manager(d, l))
+                    add(f"Editor: open worktree {lbl} in {ed}", "worktree", lambda d=wt_d: self.open_editor(cwd=d))
         for ag in agents():
             add(f"Agent: {ag['name']}", "new pane", lambda ag=ag: self.add_agent(ag))
             if ag.get("cmd"):
@@ -596,7 +767,9 @@ class App(Gtk.Application):
         add("Orchestrator: chat", "Ctrl+Shift+K", self.toggle_chat)
         add("Project list: show/hide", "Ctrl+B", self.toggle_side)
         add("Project secrets…", "", self.on_secrets)
-        add("Project: remove…", "", self.on_remove)
+        add("Project: rename…", "F2 in the list", self.on_rename)
+        add("Project: remove…", "Delete in the list", self.on_remove)
+        add("Agents: edit / rename / delete…", "Settings → Agents", lambda: self.on_settings(page="agents"))
         add("Text: larger", "Ctrl +", lambda: self.set_zoom(self.zoom + step))
         add("Text: smaller", "Ctrl −", lambda: self.set_zoom(self.zoom - step))
         add("Text: normal size", "Ctrl 0", lambda: self.set_zoom(1.0))
@@ -731,7 +904,7 @@ class App(Gtk.Application):
         w.present(); tv.grab_focus()
 
     # ---------- Settings (visual, VS Code style); saves automatically on every change
-    def on_settings(self, *_):
+    def on_settings(self, *_, page=None):
         for x in Gtk.Window.list_toplevels():
             if x.get_title() == "Settings": x.present(); return
         w = Gtk.Window(title="Settings", transient_for=self.win, default_width=900, default_height=600)
@@ -811,6 +984,29 @@ class App(Gtk.Application):
             self.cfg["terminal"]["zoom_step"] = round(b.get_value() / 100, 2); save()
         st.connect("value-changed", step_changed)
         row(t, "Zoom step (%)", "How much each Ctrl + / Ctrl − changes.", st)
+
+        # --- Editor & File Navigator (neovim/micro + ranger/nnn)
+        ed_list = list(core.EDITORS)
+        cur_ed = (self.cfg.get("tools", {}).get("editor") or "nvim").strip()
+        if cur_ed not in ed_list: ed_list.insert(0, cur_ed)
+        ed_labels = [f"{x}  ({'✓ installed' if shutil.which(x) else 'not installed'})" for x in ed_list]
+        ed_dd = Gtk.DropDown.new_from_strings(ed_labels)
+        ed_dd.set_selected(ed_list.index(cur_ed))
+        def ed_changed(*_):
+            self.cfg.setdefault("tools", {})["editor"] = ed_list[ed_dd.get_selected()]; save()
+        ed_dd.connect("notify::selected", ed_changed)
+        row(t, "Code editor (Ctrl+E / Ctrl+P)", "Used to open files from Quick Open, Changes, Ctrl+Click, and inside ranger/nnn.", ed_dd)
+
+        fm_list = list(core.FILE_MANAGERS)
+        cur_fm = (self.cfg.get("tools", {}).get("file_manager") or "ranger").strip()
+        if cur_fm not in fm_list: fm_list.insert(0, cur_fm)
+        fm_labels = [f"{x}  ({'✓ installed' if shutil.which(x) else 'not installed'})" for x in fm_list]
+        fm_dd = Gtk.DropDown.new_from_strings(fm_labels)
+        fm_dd.set_selected(fm_list.index(cur_fm))
+        def fm_changed(*_):
+            self.cfg.setdefault("tools", {})["file_manager"] = fm_list[fm_dd.get_selected()]; save()
+        fm_dd.connect("notify::selected", fm_changed)
+        row(t, "File navigator (Ctrl+Shift+F)", "Terminal file manager (ranger / nnn). Pressing Enter on a file opens it in your chosen editor.", fm_dd)
         # --- Appearance
         ap = page("appearance", "Appearance", "Interface colors and shape. Applies immediately.")
         theme_names = list(core.THEMES)
@@ -853,8 +1049,10 @@ class App(Gtk.Application):
         # --- Shortcuts
         k = page("shortcuts", "Shortcuts", "Click a shortcut and press the new combination. Backspace removes, Esc cancels.")
         LABELS = [("palette", "Open actions (command palette)"), ("settings", "Open settings"),
-                  ("changes", "Changes / diff / commit"), ("agents_panel", "Agents panel"),
-                  ("sidebar", "Project list"), ("chat", "Chat with the orchestrator"), ("zoom_in", "Larger text"), ("zoom_out", "Smaller text"),
+                  ("changes", "Changes / diff / commit"), ("editor", "Open code editor (nvim/micro)"),
+                  ("files", "Navigate files (ranger/nnn)"), ("quick_open", "Quick open file in editor"),
+                  ("agents_panel", "Agents panel"), ("sidebar", "Project list"),
+                  ("chat", "Chat with the orchestrator"), ("zoom_in", "Larger text"), ("zoom_out", "Smaller text"),
                   ("zoom_reset", "Normal text"), ("copy", "Copy"), ("paste", "Paste")]
         capturing = {"k": None}
         buttons = {}
@@ -926,8 +1124,8 @@ class App(Gtk.Application):
         def upd_changed(*_):
             self.cfg.setdefault("updates", {})["auto"] = upd.get_active(); save()
         upd.connect("notify::active", upd_changed)
-        row(v, "Automatic updates", {"git": "Pulls new commits into this checkout (fast-forward only, never over local changes).",
-                                     "release": "Installs new releases from GitHub in the background.",
+        row(v, "Check for updates when opening", {"git": "Looks for new commits on GitHub every time the app opens and ASKS before pulling (fast-forward only, never over local changes).",
+                                     "release": "Compares your version with GitHub's main every time the app opens and ASKS before installing.",
                                      "package": "Installed by your distro package: update it with your package manager."}[mode], upd)
         for label, path in [("Configuration", core.HOME / "config.toml"), ("Agents", core.CFG / "agents.json"),
                             ("Data (memory, events)", core.DATA), ("GitHub workspaces", core.WS)]:
@@ -938,7 +1136,7 @@ class App(Gtk.Application):
         kc2 = Gtk.EventControllerKey()
         kc2.connect("key-pressed", lambda c, kv, kcode, stt: (w.close(), True)[1] if kv == Gdk.KEY_Escape and not capturing["k"] else False)
         w.add_controller(kc2)
-        pg = os.environ.get("RAIDPOINT_SETTINGS_PAGE")        # screenshots only
+        pg = page or os.environ.get("RAIDPOINT_SETTINGS_PAGE")
         if pg: stack.set_visible_child_name(pg)
         w.present()
 
@@ -991,6 +1189,7 @@ class App(Gtk.Application):
 
     def show_ctx(self, name, term, x, y):
         link = self.link_at(term, x, y)
+        fhit = self.file_at(name, term, x, y)
         fut = {"pane": None}
         def calc():
             try: fut["pane"] = self.pane_at(name, term, x, y)
@@ -1004,10 +1203,18 @@ class App(Gtk.Application):
             if css: b.add_css_class(css)
             b.connect("clicked", lambda *_: (pop.popdown(), cb())); box.append(b)
         def sep(): box.append(Gtk.Separator())
+        if fhit:
+            ed = core.configured_editor(self.cfg)
+            lbl_line = f":{fhit[3]}" if fhit[3] else ""
+            item(f"Open in {ed} ({os.path.basename(fhit[0])}{lbl_line})",
+                 lambda: self.open_in_editor(fhit[0], fhit[1], fhit[2], fhit[3])); sep()
         if link:
             item("Open link", lambda: self.open_uri(link)); item("Copy link", lambda: self.set_clipboard(link)); sep()
         item("Copy", lambda: self.do_copy(name))
         item("Paste", lambda: term.paste_clipboard())
+        sep()
+        item(f"Navigate files ({core.configured_file_manager(self.cfg)})", lambda: self.open_file_manager())
+        item(f"Open editor ({core.configured_editor(self.cfg)})", lambda: self.open_editor())
         sep()
         item("Split right  (side by side)", lambda: self.pane_action(name, fut, "split-window", "-h", cwd=True))
         item("Split below", lambda: self.pane_action(name, fut, "split-window", "-v", cwd=True))
@@ -1046,21 +1253,51 @@ class App(Gtk.Application):
 
     # ---------- auto-update
     def update_tick(self, force=False):
+        """checks GitHub's main (hash); it NEVER installs by itself: it asks first"""
         def work():
-            r = core.auto_update(force=force)
+            r = core.check_update() if force else core.update_check_due()
             if r: GLib.idle_add(self.on_update_result, r, force)
         threading.Thread(target=work, daemon=True).start()
         return True
 
     def on_update_result(self, r, manual):
-        if r["status"] == "updated":
-            n = Gio.Notification.new("/dev/raid updated")
-            n.set_body(f"{r['msg']}. Restart to apply (your terminals stay open).")
-            n.add_button("Restart now", "app.restart")
-            self.send_notification("update", n)
+        if r["status"] == "available":
+            if r.get("to") in self._upd_asked and not manual: return False      # already asked in this session
+            self._upd_asked.add(r.get("to")); self.prompt_update(r)
         elif manual:
-            n = Gio.Notification.new("/dev/raid: " + {"current": "up to date", "error": "update failed"}.get(r["status"], "update skipped"))
+            n = Gio.Notification.new("/dev/raid: " + {"current": "up to date", "error": "update check failed"}.get(r["status"], "update skipped"))
             n.set_body(r["msg"]); self.send_notification("update", n)
+        return False
+
+    def prompt_update(self, r):
+        detail = (r.get("subject") or r["msg"]) + f"\n\n{r.get('from') or '?'} → {r.get('to')}" + (f"   ·   {r['count']} change(s)" if r.get("count") else "")
+        dlg = Gtk.AlertDialog(message="/dev/raid update available", detail=detail,
+                              buttons=["Later", "Skip this version", "Install"], cancel_button=0, default_button=2)
+        def done(d, res):
+            try: c = d.choose_finish(res)
+            except GLib.Error: return
+            if c == 1: core.skip_update(r.get("to"))
+            elif c == 2: self.install_update()
+        dlg.choose(self.win, None, done)
+
+    def install_update(self):
+        n = Gio.Notification.new("/dev/raid"); n.set_body("Installing the update…"); self.send_notification("update", n)
+        def work():
+            r = core.check_update(apply=True)
+            GLib.idle_add(self.after_update, r)
+        threading.Thread(target=work, daemon=True).start()
+
+    def after_update(self, r):
+        if r["status"] == "updated":
+            dlg = Gtk.AlertDialog(message="Update installed", detail=f"{r['msg']}\n\nRestart now? Your terminals stay open (the sessions live in tmux).",
+                                  buttons=["Later", "Restart"], cancel_button=0, default_button=1)
+            def done(d, res):
+                try:
+                    if d.choose_finish(res) == 1: self.restart()
+                except GLib.Error: pass
+            dlg.choose(self.win, None, done)
+        else:
+            Gtk.AlertDialog(message="The update did not finish", detail=r["msg"]).show(self.win)
         return False
 
     def restart(self):
@@ -1227,6 +1464,122 @@ class App(Gtk.Application):
         threading.Thread(target=work, daemon=True).start()
         return False
 
+    # ---------- terminal editor (nvim/micro) & file navigator (ranger/nnn) & quick open (Ctrl+P)
+    def open_editor(self, filepath=None, line=None, cwd=None):
+        if not self.cur: return
+        proj = self.cur
+        def work():
+            _pid, _d, err = core.open_in_tmux_editor(proj, filepath=filepath, line=line, cwd=cwd, layout=self.layout, cfg=self.cfg)
+            GLib.idle_add(self.after_pane, proj, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def open_file_manager(self, cwd=None, wt_label="main"):
+        if not self.cur: return
+        proj = self.cur
+        def work():
+            _pid, _d, err = core.open_in_tmux_fm(proj, cwd=cwd, layout=self.layout, cfg=self.cfg, wt_label=wt_label)
+            GLib.idle_add(self.after_pane, proj, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def open_in_editor(self, filepath, root_dir=None, wt_label="main", line=None, preview=False):
+        self.open_editor(filepath=filepath, line=line, cwd=root_dir)
+
+    def on_quick_open(self, *_):
+        """Quick Open (Ctrl+P): pick a worktree, fuzzy-search files (optional :line), or launch ranger/nnn."""
+        if not self.cur: return
+        proj = self.cur; p = load().get(proj) or {}
+        if p.get("host"):
+            self.open_file_manager(); return
+        ed = core.configured_editor(self.cfg)
+        fm = core.configured_file_manager(self.cfg)
+        base = os.path.expanduser(p.get("dir", "~"))
+        targets = core.git_targets(base) or [("main", base)]
+        state = {"dir": targets[0][1], "lbl": targets[0][0], "files": core.project_files(targets[0][1])}
+
+        w = Gtk.Window(title=f"Quick Open in {ed} — {proj}", transient_for=self.win, modal=True,
+                       default_width=600, default_height=440, resizable=False)
+        top = Gtk.Box(spacing=8, margin_top=10, margin_start=10, margin_end=10)
+        wt_dd = Gtk.DropDown.new_from_strings([f"⎇ {lbl}  —  {d}" for lbl, d in targets])
+        wt_dd.set_hexpand(True)
+        fm_btn = Gtk.Button(label=f"Open {fm} here", tooltip_text=f"Open {fm} in this folder (Ctrl+Shift+F)")
+        fm_btn.add_css_class("agent")
+        top.append(wt_dd); top.append(fm_btn)
+
+        entry = Gtk.SearchEntry(placeholder_text=f"Type file name to open in {ed} (optional :line, e.g. core.py:300)…",
+                                margin_top=6, margin_start=10, margin_end=10)
+        lst = Gtk.ListBox(); lst.add_css_class("rp-list")
+        sc = Gtk.ScrolledWindow(vexpand=True, margin_top=8, margin_bottom=10, margin_start=10, margin_end=10,
+                                hscrollbar_policy=Gtk.PolicyType.NEVER)
+        sc.set_size_request(580, 320); sc.set_child(lst)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(top); box.append(entry); box.append(sc); w.set_child(box)
+
+        def parse_query():
+            raw = entry.get_text().strip()
+            if ":" in raw:
+                q_part, ln_part = raw.rsplit(":", 1)
+                if ln_part.isdigit():
+                    return q_part.lower().split(), int(ln_part)
+            return raw.lower().split(), None
+
+        def fill(*_):
+            tokens, line_q = parse_query()
+            while (r := lst.get_first_child()): lst.remove(r)
+            shown = 0
+            for rel in state["files"]:
+                low = rel.lower()
+                if all(t in low for t in tokens):
+                    r = Gtk.ListBoxRow(); r.rel = rel; r.line = line_q
+                    h = Gtk.Box(spacing=8, margin_top=3, margin_bottom=3, margin_start=6, margin_end=6)
+                    h.append(Gtk.Label(label=os.path.basename(rel), xalign=0))
+                    sub = Gtk.Label(label=rel + (f":{line_q}" if line_q else ""), xalign=1, hexpand=True, ellipsize=Pango.EllipsizeMode.START)
+                    sub.add_css_class("ag-sub"); h.append(sub)
+                    r.set_child(h); lst.append(r)
+                    shown += 1
+                    if shown >= 120: break
+            first = lst.get_row_at_index(0)
+            if first: lst.select_row(first)
+
+        def on_wt_changed(*_):
+            i = wt_dd.get_selected()
+            if 0 <= i < len(targets):
+                state["lbl"], state["dir"] = targets[i][0], targets[i][1]
+                state["files"] = core.project_files(state["dir"])
+                fill()
+        wt_dd.connect("notify::selected", on_wt_changed)
+
+        def launch_fm(*_):
+            d, lbl = state["dir"], state["lbl"]
+            w.close()
+            GLib.idle_add(lambda: (self.open_file_manager(d, lbl), False)[1])
+        fm_btn.connect("clicked", launch_fm)
+
+        def pick(row=None):
+            row = row or lst.get_selected_row()
+            if not row or not hasattr(row, "rel"): return
+            _, line_q = parse_query()
+            rel = row.rel
+            ln = getattr(row, "line", None) or line_q
+            d, lbl = state["dir"], state["lbl"]
+            w.close()
+            GLib.idle_add(lambda: (self.open_in_editor(os.path.join(d, rel), d, lbl, ln), False)[1])
+
+        def move(d):
+            row = lst.get_selected_row(); i = (row.get_index() if row else -1) + d
+            nxt = lst.get_row_at_index(max(0, i))
+            if nxt: lst.select_row(nxt); nxt.grab_focus(); entry.grab_focus()
+
+        entry.connect("search-changed", fill); entry.connect("activate", lambda *_: pick())
+        lst.connect("row-activated", lambda _l, r: pick(r))
+        kc = Gtk.EventControllerKey(); kc.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        def key(_c, kv, _kcode, _st):
+            if kv == Gdk.KEY_Escape: w.close(); return True
+            if kv == Gdk.KEY_Down: move(1); return True
+            if kv == Gdk.KEY_Up: move(-1); return True
+            return False
+        kc.connect("key-pressed", key); w.add_controller(kc)
+        fill(); w.present(); entry.grab_focus()
+
     # ---------- agents panel
     def toggle_chat(self):
         on = not self.chat_rev.get_reveal_child()
@@ -1386,10 +1739,18 @@ class App(Gtk.Application):
             self.title_lbl.set_label("Changes: unavailable for remote projects"); return
         base = os.path.expanduser(p.get("dir", "~"))
         w = Gtk.Window(title=f"Changes — {proj}", transient_for=self.win, default_width=1000, default_height=640)
-        st = {"dir": base, "files": [], "sel": None}
+        st = {"dir": base, "lbl": "main", "files": [], "sel": None}
+        ed = core.configured_editor(self.cfg)
+        fm = core.configured_file_manager(self.cfg)
         target_dd = Gtk.DropDown.new_from_strings([base]); target_dd.set_tooltip_text("Folder (main or an agent's worktree)")
         refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh")
-        top = Gtk.Box(spacing=8); top.append(target_dd); top.append(refresh)
+        fm_btn = Gtk.Button(label=f"Browse ({fm})", tooltip_text=f"Open {fm} in this folder")
+        fm_btn.connect("clicked", lambda *_: (w.close(), GLib.idle_add(lambda: (self.open_file_manager(st["dir"], st.get("lbl", "main")), False)[1])))
+        merge_btn = Gtk.Button(label="Merge into main", tooltip_text="Merge this agent's worktree branch into main")
+        merge_btn.set_visible(False)
+        rm_wt_btn = Gtk.Button(label="Remove worktree", tooltip_text="Delete this isolated worktree and branch")
+        rm_wt_btn.add_css_class("danger"); rm_wt_btn.set_visible(False)
+        top = Gtk.Box(spacing=8); top.append(target_dd); top.append(refresh); top.append(fm_btn); top.append(merge_btn); top.append(rm_wt_btn)
         lst = Gtk.ListBox(); lst.add_css_class("rp-list")
         lsc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER, min_content_width=280); lsc.set_child(lst)
         tv = Gtk.TextView(editable=False, monospace=True, cursor_visible=False, left_margin=8, top_margin=6)
@@ -1397,11 +1758,13 @@ class App(Gtk.Application):
         for tag_name, fg in (("add", "#a6e3a1"), ("del", "#f38ba8"), ("hunk", "#89b4fa"), ("meta", "#6c7086")):
             tb.create_tag(tag_name, foreground=fg)
         dsc = Gtk.ScrolledWindow(hexpand=True, vexpand=True); dsc.set_child(tv)
-        rev = Gtk.Button(label="Revert this file"); rev.add_css_class("danger"); rev.set_sensitive(False)
+        edit_btn = Gtk.Button(label=f"Open in {ed}", hexpand=True); edit_btn.set_sensitive(False)
+        rev = Gtk.Button(label="Revert file", hexpand=True); rev.add_css_class("danger"); rev.set_sensitive(False)
+        act_row = Gtk.Box(spacing=6); act_row.append(edit_btn); act_row.append(rev)
         msg = Gtk.Entry(placeholder_text="Commit message (everything in the list)", hexpand=True)
         ok = Gtk.Button(label="Commit all"); ok.add_css_class("agent")
         info = Gtk.Label(xalign=0); info.add_css_class("ag-sub")
-        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6); left.append(top); left.append(lsc); left.append(rev)
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6); left.append(top); left.append(lsc); left.append(act_row)
         cols = Gtk.Box(spacing=8); cols.append(left); cols.append(dsc)
         bar = Gtk.Box(spacing=8); bar.append(msg); bar.append(ok)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=10, margin_end=10)
@@ -1421,14 +1784,24 @@ class App(Gtk.Application):
 
         def select(row):
             if row is None or not hasattr(row, "item"):
-                st["sel"] = None; rev.set_sensitive(False); show_diff(""); return
-            st["sel"] = row.item; rev.set_sensitive(True); sta, path = row.item
+                st["sel"] = None; rev.set_sensitive(False); edit_btn.set_sensitive(False); show_diff(""); return
+            st["sel"] = row.item; rev.set_sensitive(True); edit_btn.set_sensitive( row.item[0] != "D"); sta, path = row.item
             def work():
                 try: t = core.git_diff(st["dir"], path, sta)
                 except Exception as e: t = f"error: {e}"
                 GLib.idle_add(lambda: (st["sel"] == row.item and show_diff(t)) and False)
             threading.Thread(target=work, daemon=True).start()
         lst.connect("row-selected", lambda l, r: select(r))
+
+        def do_edit(*_):
+            if not st["sel"]: return
+            sta, path = st["sel"]
+            if sta == "D": return
+            full = os.path.join(st["dir"], path)
+            ln = core.git_first_changed_line(st["dir"], path)
+            w.close()
+            GLib.idle_add(lambda: (self.open_in_editor(full, st["dir"], st.get("lbl", "main"), ln), False)[1])
+        edit_btn.connect("clicked", do_edit)
 
         def fill(files):
             st["files"] = files or []
@@ -1446,6 +1819,8 @@ class App(Gtk.Application):
 
         def reload(*_):
             d = st["dir"]
+            is_wt = os.path.realpath(d) != os.path.realpath(base)
+            merge_btn.set_visible(is_wt); rm_wt_btn.set_visible(is_wt)
             def work():
                 try: ch = core.git_changes(d)
                 except Exception: ch = None
@@ -1461,11 +1836,41 @@ class App(Gtk.Application):
             if not ts: return
             st["ts"] = ts
             target_dd.set_model(Gtk.StringList.new([f"{n}  —  {pth}" for n, pth in ts]))
-            st["dir"] = ts[0][1]
+            st["lbl"], st["dir"] = ts[0][0], ts[0][1]
+            reload()
         def switch_target(*_):
             ts = st.get("ts") or []; i = target_dd.get_selected()
-            if 0 <= i < len(ts) and ts[i][1] != st["dir"]: st["dir"] = ts[i][1]; reload()
+            if 0 <= i < len(ts) and ts[i][1] != st["dir"]:
+                st["lbl"], st["dir"] = ts[i][0], ts[i][1]; reload()
         target_dd.connect("notify::selected", switch_target)
+
+        def do_merge(*_):
+            wt_d = st["dir"]
+            def work():
+                good, out = core.git_merge_worktree(base, wt_d)
+                GLib.idle_add(lambda: (info.set_label(("Merged into main: " if good else "Merge failed: ") + out[:160]), False)[1])
+            threading.Thread(target=work, daemon=True).start()
+        merge_btn.connect("clicked", do_merge)
+
+        def do_rm_wt(*_):
+            wt_d, lbl = st["dir"], st.get("lbl", "worktree")
+            dlg = Gtk.AlertDialog(message=f"Remove worktree '{lbl}'?",
+                                  detail="The worktree folder and its agent/* branch will be deleted.",
+                                  buttons=["Cancel", "Remove worktree"], cancel_button=0, default_button=0)
+            def done(d, res):
+                try:
+                    if d.choose_finish(res) != 1: return
+                except GLib.Error: return
+                def work():
+                    good, out = core.git_remove_worktree(base, wt_d, force=True)
+                    def after():
+                        info.set_label(out[:160])
+                        if good: threading.Thread(target=targets, daemon=True).start()
+                        return False
+                    GLib.idle_add(after)
+                threading.Thread(target=work, daemon=True).start()
+            dlg.choose(w, None, done)
+        rm_wt_btn.connect("clicked", do_rm_wt)
 
         def do_rev(*_):
             if not st["sel"]: return
@@ -1530,6 +1935,140 @@ class App(Gtk.Application):
         for x in (info, sc, name_e, value_e, ok): box.append(x)
         w.set_child(box); fill(); w.present()
 
+    # ---------- Sessions tab: live tmux sessions, with control (open, kill, clean up)
+    def sessions_tick(self):
+        self.sessions_refresh(); return True
+
+    def sessions_refresh(self):
+        threading.Thread(target=lambda: GLib.idle_add(self.render_sessions, core.sessions_info()), daemon=True).start()
+
+    def sess_project(self, sname):
+        return next((n for n in self.names() if core.sess(n) == sname), None)
+
+    def render_sessions(self, infos):
+        self._sinfos = infos
+        n = len(infos); busy = sum(1 for d in infos if d["state"] == "busy"); idle = [d for d in infos if d["state"] == "idle"]
+        self.tab_sess.set_label(f"Sessions · {n}" if n else "Sessions")
+        self.scount.set_label((f"{n} live" + (f" · {busy} running" if busy else "")) if n else "")
+        self.clean_btn.set_visible(bool(idle))
+        sig = json.dumps([[d["name"], d["state"], d["windows"], d["panes"], d["busy"], d["age_s"] // 60, bool(self.sess_project(d["name"]))] for d in infos])
+        if sig == self._ssig: return False
+        self._ssig = sig
+        while (r := self.slist.get_first_child()): self.slist.remove(r)
+        if not infos:
+            r = Gtk.ListBoxRow(activatable=False, selectable=False)
+            l = Gtk.Label(label="No live sessions.\n\nOpening a project starts one; it keeps running after you close the window.",
+                          wrap=True, xalign=0, margin_start=12, margin_end=12, margin_top=14, max_width_chars=1, hexpand=True); l.add_css_class("ag-sub")
+            r.set_child(l); self.slist.append(r); return False
+        for d in infos:
+            proj = self.sess_project(d["name"])
+            row = Gtk.ListBoxRow(); row.sinfo = d
+            box = Gtk.Box(spacing=8)
+            dot = Gtk.Label(label="●"); dot.add_css_class({"open": "dot-on", "busy": "dot-busy", "idle": "dot-off"}[d["state"]])
+            txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+            nm = Gtk.Label(label=d["name"], xalign=0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=1, hexpand=True); nm.add_css_class("name-lbl")
+            top = Gtk.Box(spacing=6); top.append(nm)
+            if not proj:
+                tag = Gtk.Label(label="orphan", tooltip_text="No project uses this session: click to adopt it as one"); tag.add_css_class("repo-owner"); top.append(tag)
+            bits = [f"{d['windows']} tab{'s' if d['windows'] != 1 else ''}"]
+            if d["busy"]: bits.append(", ".join(d["busy"][:2]) + ("…" if len(d["busy"]) > 2 else ""))
+            bits.append(core.dur_short(d["age_s"]))
+            sub = Gtk.Label(label=" · ".join(bits), xalign=0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=1, hexpand=True,
+                            tooltip_text={"open": "open in a window", "busy": "running in the background", "idle": "idle: only shells"}[d["state"]])
+            sub.add_css_class("repo-owner")
+            txt.append(top); txt.append(sub)
+            kb = Gtk.Button(icon_name="window-close-symbolic", has_frame=False, valign=Gtk.Align.CENTER, tooltip_text="Kill this session")
+            kb.add_css_class("danger"); kb.connect("clicked", lambda _b, d=d: self.session_kill_ui([d]))
+            box.append(dot); box.append(txt); box.append(kb)
+            row.set_tooltip_text(f"{d['cwd'] or '?'}\n{d['panes']} pane(s)" + (f"\nrunning: {', '.join(d['busy'])}" if d["busy"] else ""))
+            row.set_child(box); self.slist.append(row)
+        return False
+
+    def session_open(self, d):
+        proj = self.sess_project(d["name"])
+        if not proj:         # orphan session (no project): adopt it as a terminal project, same name
+            proj = d["name"]; cwd = d["cwd"] if os.path.isdir(d.get("cwd") or "") else os.path.expanduser("~")
+            setp(lambda db: db.setdefault(proj, {"dir": cwd, "startup": [], "term": True}))
+            self.refresh_list()
+        self.open(proj)
+
+    def session_menu(self, row, x, y):
+        d = row.sinfo
+        pop = Gtk.Popover(has_arrow=False); pop.set_parent(self.slist)
+        r = Gdk.Rectangle(); r.x, r.y, r.width, r.height = int(x), int(y), 1, 1; pop.set_pointing_to(r)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=4, margin_bottom=4, margin_start=4, margin_end=4)
+        def item(txt, cb, css=None):
+            b = Gtk.Button(label=txt, has_frame=False); b.get_child().set_xalign(0); b.add_css_class("pop-item")
+            if css: b.add_css_class(css)
+            b.connect("clicked", lambda *_: (pop.popdown(), cb())); box.append(b)
+        item("Open", lambda: self.session_open(d))
+        if d.get("cwd"): item("Copy path", lambda: self.set_clipboard(d["cwd"]))
+        box.append(Gtk.Separator())
+        item("Kill session…", lambda: self.session_kill_ui([d]), "danger")
+        pop.set_child(box); pop.connect("closed", lambda q: GLib.idle_add(q.unparent)); pop.popup()
+
+    def session_kill_ui(self, infos):
+        if not infos: return
+        busy = [d for d in infos if d["state"] == "busy"]; opened = [d for d in infos if d["state"] == "open"]
+        if len(infos) == 1:
+            d = infos[0]; msg = f"Kill session '{d['name']}'?"
+        else:
+            msg = f"Kill {len(infos)} sessions?"
+        detail = []
+        if busy: detail.append("Still running: " + "; ".join(f"{d['name']}: {', '.join(d['busy'])}" for d in busy) + ". It will be terminated.")
+        if opened: detail.append("Open in this window: it will close (the project stays in the list).")
+        if not busy and not opened: detail.append("Only idle shells. Your files are not touched.")
+        if len(infos) > 1: detail.append("Sessions: " + ", ".join(d["name"] for d in infos))
+        dlg = Gtk.AlertDialog(message=msg, detail="\n\n".join(detail), buttons=["Cancel", "Kill"], cancel_button=0, default_button=0)
+        def done(dd, res):
+            try:
+                if dd.choose_finish(res) != 1: return
+            except GLib.Error: return
+            self.kill_sessions([d["name"] for d in infos])
+        dlg.choose(self.win, None, done)
+
+    def kill_sessions(self, names):
+        for sname in names:
+            proj = self.sess_project(sname)
+            t = self.terms.pop(proj, None) if proj else None      # BEFORE killing: otherwise the window would respawn it
+            if t: self.stack.remove(t)
+            if proj and self.cur == proj:
+                self.cur = None; self.stack.set_visible_child_name("_empty"); self.title_lbl.set_label("/dev/raid")
+        def work():
+            for sname in names: core.kill_session(sname)
+            GLib.idle_add(lambda: (self.refresh_list(), self.sessions_refresh(), False)[2])
+        threading.Thread(target=work, daemon=True).start()
+
+    def sessions_cleanup(self):
+        idle = [d for d in self._sinfos if d["state"] == "idle"]
+        if not idle:
+            Gtk.AlertDialog(message="Nothing to clean up", detail="No session is idle (idle = nobody attached and only shells running).").show(self.win); return
+        w = Gtk.Window(title="Clean up sessions", transient_for=self.win, modal=True, default_width=380)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=16, margin_bottom=16, margin_start=16, margin_end=16)
+        info = Gtk.Label(label="Idle sessions: nobody attached and only shells running. Uncheck what you want to keep.", wrap=True, xalign=0)
+        info.add_css_class("ag-sub"); box.append(info)
+        checks = []
+        for d in idle:
+            c = Gtk.CheckButton(label=f"{d['name']}   ({d['windows']} tab{'s' if d['windows'] != 1 else ''} · idle {core.dur_short(d['age_s'])})", active=True)
+            checks.append((c, d)); box.append(c)
+        ok = Gtk.Button(label="Kill selected", halign=Gtk.Align.END); ok.add_css_class("agent"); box.append(ok)
+        def go(*_):
+            sel = [d["name"] for c, d in checks if c.get_active()]; w.close()
+            if sel: self.kill_sessions(sel)
+        ok.connect("clicked", go); w.set_child(box); w.present()
+
+    # ---------- GitHub: picker shown only when adding a project
+    def on_add_github(self, *_):
+        w = getattr(self, "_gh_win", None)
+        if not w:
+            w = Gtk.Window(title="Add project from GitHub", transient_for=self.win, default_width=440, default_height=560)
+            w.set_child(self._rbox)
+            w.connect("close-request", lambda x: (x.hide(), True)[1])
+            kc = Gtk.EventControllerKey()
+            kc.connect("key-pressed", lambda c, kv, kcode, st: (w.hide(), True)[1] if kv == Gdk.KEY_Escape else False)
+            w.add_controller(kc); self._gh_win = w
+        self.search.set_text(""); w.present(); self.search.grab_focus(); self.refresh_repos()
+
     # ---------- GitHub repositories (cloned on demand into ~/.raid_point/workspaces/<repo>)
     def repo_filter(self, row):
         q = self.search.get_text().strip().lower(); r = row.repo
@@ -1593,6 +2132,7 @@ class App(Gtk.Application):
         if not name:
             name = core.unique_name(core.safe_name(rp["name"]), taken_dir=path)
             setp(lambda db: db.setdefault(name, {"dir": path, "startup": [], "github": rp["nameWithOwner"]}))
+        if getattr(self, "_gh_win", None): self._gh_win.hide()
         self.refresh_list(); self.tab_proj.set_active(True); self.open(name); self._repos_ts = 0
         return False
 
@@ -1645,24 +2185,87 @@ class App(Gtk.Application):
             setp(lambda db: db.__setitem__(n, reg)); w.close(); self.refresh_list(); self.open(n)
         ok.connect("clicked", go); w.present()
 
-    def on_remove(self, *_):
-        if not self.cur: return
-        name = self.cur
+    def on_remove(self, *_, name=None):
+        name = name or self.cur
+        if not name or name not in load(): return
+        host = load().get(name, {}).get("host")
         dlg = Gtk.AlertDialog(message=f"Remove '{name}'?",
-                              detail="This closes this project's terminals.",
+                              detail=("This only removes it from the list; the session on the server keeps running."
+                                      if host else "This closes the project's terminals. Your files are NOT deleted."),
                               buttons=["Cancel", "Remove"], cancel_button=0, default_button=0)
         def done(d, res):
             try:
                 if d.choose_finish(res) != 1: return
             except GLib.Error: return
-            if not load().get(name, {}).get("host"):
+            if not host:
                 tmux("kill-session", "-t", core.sess_t(name))
             setp(lambda db: db.pop(name, None))
             t = self.terms.pop(name, None)
             if t: self.stack.remove(t)
-            self.cur = None; self.stack.set_visible_child_name("_empty")
-            self.title_lbl.set_label("/dev/raid"); self.refresh_list()
+            self.attn.pop(name, None)
+            if self.cur == name:
+                self.cur = None; self.stack.set_visible_child_name("_empty"); self.title_lbl.set_label("/dev/raid")
+            self.refresh_list()
         dlg.choose(self.win, None, done)
+
+    def on_rename(self, *_, name=None):
+        name = name or self.cur
+        if not name or name not in load(): return
+        w = Gtk.Window(title="Rename", transient_for=self.win, modal=True, default_width=360)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=18, margin_bottom=18, margin_start=18, margin_end=18)
+        l = Gtk.Label(label=f"New name for '{name}'", xalign=0); l.add_css_class("side-title")
+        e = Gtk.Entry(text=name, activates_default=True); err = Gtk.Label(label="", xalign=0); err.add_css_class("ag-sub")
+        ok = Gtk.Button(label="Rename"); ok.add_css_class("agent")
+        for x in (l, e, err, ok): box.append(x)
+        w.set_child(box); w.set_default_widget(ok)
+        def go(*_):
+            new = core.safe_name(e.get_text().strip())
+            if new == name: w.close(); return
+            if new in load() or new.startswith("_"):
+                err.set_label("There is already a project with that name."); return
+            w.close(); self.do_rename(name, new)
+        ok.connect("clicked", go); e.connect("activate", go)
+        w.present(); e.grab_focus(); e.select_region(0, -1)
+
+    def do_rename(self, old, new):
+        """the name is the key of projects.json AND the tmux session: rename both (order preserved) and reconnect"""
+        if not load().get(old, {}).get("host") and core.sess(old) in alive():
+            tmux("rename-session", "-t", core.sess_t(old), core.sess(new))
+        elif load().get(old, {}).get("host"):
+            threading.Thread(target=lambda: core.run_tmux(old, "rename-session", "-t", core.sess_t(old), core.sess(new)), daemon=True).start()
+        def ren(db):
+            items = [(new if k == old else k, v) for k, v in db.items()]
+            db.clear(); db.update(items)
+            if db.get("_last") == old: db["_last"] = new
+        setp(ren)
+        t = self.terms.pop(old, None)          # removed from terms BEFORE the widget: no automatic respawn
+        if t: self.stack.remove(t)
+        self.attn.pop(old, None)
+        was_cur = self.cur == old
+        if was_cur: self.cur = None
+        self.refresh_list()
+        if was_cur: GLib.timeout_add(400, lambda: (self.open(new), False)[1])
+
+    def project_menu(self, row, x, y):
+        name = row.name; p = load().get(name, {})
+        self.list.select_row(row)
+        pop = Gtk.Popover(has_arrow=False); pop.set_parent(self.list)
+        r = Gdk.Rectangle(); r.x, r.y, r.width, r.height = int(x), int(y), 1, 1; pop.set_pointing_to(r)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=4, margin_bottom=4, margin_start=4, margin_end=4)
+        def item(txt, cb, css=None):
+            b = Gtk.Button(label=txt, has_frame=False); b.get_child().set_xalign(0); b.add_css_class("pop-item")
+            if css: b.add_css_class(css)
+            b.connect("clicked", lambda *_: (pop.popdown(), cb())); box.append(b)
+        item("Open", lambda: self.open(name))
+        item("Rename…  (F2)", lambda: self.on_rename(name=name))
+        if not p.get("host") and p.get("dir"):
+            item("Open folder", lambda: self.open_uri(os.path.expanduser(p["dir"])))
+            item("Copy path", lambda: self.set_clipboard(os.path.expanduser(p["dir"])))
+        box.append(Gtk.Separator())
+        item("Remove…  (Delete)", lambda: self.on_remove(name=name), "danger")
+        pop.set_child(box)
+        pop.connect("closed", lambda q: GLib.idle_add(q.unparent))
+        pop.popup()
 
 if __name__ == "__main__":
     sys.exit(App().run(sys.argv))

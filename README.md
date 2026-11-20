@@ -12,9 +12,12 @@ in parallel, one set of terminals per project, that **survives** when you close 
 
 ## What it does
 
-- **Projects and Repos.** *Projects* is what you're working on; *Repos* lists **all your GitHub repositories**
-  (user + orgs, via `gh`). Opening a repo clones it into `~/.raid_point/workspaces/<repo>` and promotes it to a project.
-  Projects must be git repositories.
+- **Projects and Sessions.** The sidebar has two tabs. *Projects* is what you work on: add one with **＋ New project** from a
+  **GitHub repository** (user + orgs via `gh`, cloned into `~/.raid_point/workspaces/<repo>`), a **local folder** or an **SSH/mosh
+  server**. Right-click (or `F2` / `Delete`) renames or removes a project. *Sessions* lists the live tmux sessions: state
+  (open / running in the background / idle), tabs, what is running, and how long ago; each one can be killed (it warns when
+  something is still running), **Clean up…** kills the idle ones you pick, and an *orphan* session (no project) can be adopted
+  with a click. Projects opened from the app must be git repositories; `devraid here` terminals do not need git.
 - **Persistent terminals.** Each project is a tmux session. Close the app, come back, everything is still there.
 - **Simple layouts:** columns, rows, grid, main+side. The **＋ Agent** button opens Claude/Codex/Aider/…
   in a new pane, optionally in an **isolated git worktree** per agent. Agents start in an interactive login shell,
@@ -55,17 +58,42 @@ both ready but **not published yet**. By hand: `sudo make install PREFIX=/usr/lo
 
 Dependencies: Python 3.11+, GTK4, VTE 3.91 with PyGObject, tmux, `gh`, libsecret; `mosh` is optional.
 
-## Updates
+## As your everyday terminal
 
-The app checks for a new version every few hours:
+Use /dev/raid like Alacritty, but with panes, tabs and persistent sessions:
 
-- **git checkout** — fast-forwarded to the new commits (never over local changes);
-- **one-line install** (`curl | sh`) — the latest GitHub release is reinstalled in the same prefix;
-- **distro package** (AUR/RPM) — left to your package manager.
+```
+devraid here [dir]     # terminal in a folder (default: current). If it is a project, or inside one,
+                       # you get that project's session (a subfolder opens as a new tab); otherwise a
+                       # persistent terminal session, listed with a ›_ prefix (no git needed)
+devraid ssh <host>     # server from ~/.ssh/config or user@host, in a persistent session (reconnects to it)
+```
 
-Update by hand with `devraid update` (or `raidpoint update`; `--check` only checks). The palette has
-**Check for updates** and **Restart /dev/raid** — terminals survive a restart because tmux runs its own server.
-Turn it off in **Settings → Advanced → Automatic updates** or with `[updates] auto = false` in `~/.raid_point/config.toml`.
+The app is single-instance: both commands reuse the open window. The launcher also has a "New terminal" action, and a
+folder entry for "Open with" in file managers.
+
+## Updates and health check
+
+Every time the app opens it checks GitHub: it compares **the commit hash you have with `main`**. If `main` is ahead, it
+**asks** (it never installs by itself): *Later* · *Skip this version* · *Install*. After installing it offers to restart; your
+terminals stay open because the sessions live in tmux. There is a single branch (`main`): each commit is a version.
+
+One script does everything, and running it again updates:
+
+```
+curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh
+```
+
+It installs the missing dependencies, pins the download to an exact commit (and records it, so the app knows what it has),
+repairs the integrations with the **health check** (`raidpoint doctor --fix`) and, if the app is open, restarts it into the new
+version. The health check (also available alone: `raidpoint doctor`) verifies GTK/VTE, tmux, git, ssh, gh and its login,
+the keyring, the editor and file manager you configured (nvim, ranger…), `config.toml`, `projects.json`, and that the Claude
+Code hooks, statusLine and MCP point to **this** install (stale paths after a migration are the classic breakage).
+
+- A checkout (`git clone`) is updated with `git pull --ff-only`, never over local changes.
+- An install of an unknown version (a copied tree) is never updated: run `install.sh` once to enable tracking.
+- Turn the check off in Settings → Advanced, or `[updates] auto = false` in `config.toml`.
+- Distro packages (AUR/RPM) are updated by the package manager.
 
 ## Shortcuts
 
@@ -89,6 +117,7 @@ Keyboard and mouse (the tmux prefix is `Ctrl+a`):
 | New tab / next / previous | `Alt+t` / `Ctrl+PageDown` / `Ctrl+PageUp` |
 | Close pane (asks first) / zoom | `Alt+w` / `Alt+z` |
 | Move between panes | `Alt+arrows` |
+| Same, Terminator style (no tmux prefix) | `Ctrl+Shift+E` split side by side · `Ctrl+Shift+O` split below · `Ctrl+Shift+T` new tab · `Ctrl+Shift+W` close pane (asks) · `Ctrl+Shift+Z` zoom · `Ctrl+Shift+arrows` move between panes |
 
 The right-click menu belongs to /dev/raid (not to tmux or the program inside the terminal), so it works in any pane.
 
@@ -103,6 +132,12 @@ for_window [app_id="br.com.satela.DevRaid"] move to workspace 2
 ## Internal names
 
 The app used to be called Raid Point. The command is `devraid` (no arguments opens the window; with a verb it's the CLI: `devraid ls`, `devraid mcp`…) and the `app_id` is `br.com.satela.DevRaid`. The old `raidpoint` command, the `~/.raid_point` folder and the `raidpoint` MCP server were kept so existing installs don't break.
+
+## Moving secrets to another machine
+
+`raidpoint secret sync <host>` copies every project secret from this keyring to the other machine's keyring over ssh. Values go
+through stdin (never argv, never printed; only the names are listed) and arrive byte-for-byte identical. Needs `raidpoint` installed
+on the other side and a running Secret Service there (`raidpoint doctor` checks it). Extra ssh options: `DEVRAID_SSH_OPTS="-i ~/.ssh/key"`.
 
 ## Data
 

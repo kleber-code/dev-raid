@@ -9,6 +9,7 @@
   raidpoint mcp                  stdio MCP server (list_agents, spawn_agent, send_message, ...)
   raidpoint mem add|search|recent|reindex ...
   raidpoint secret set|list|rm <project> [NAME]
+  raidpoint secret sync <host>   copy every secret to another machine's keyring (ssh; values never printed)
   raidpoint usage                Claude Code token usage (5h / 24h / 7d, per project)
   raidpoint statusline           (Claude Code JSON on stdin) stores plan limits and prints "5h x% · 7d y%"
   raidpoint install-statusline   enable the statusLine in Claude Code (only if you don't have one)
@@ -16,6 +17,7 @@
   raidpoint transcript <file> [-f]
   raidpoint install              register hooks + MCP in Claude Code and Codex
   raidpoint update [--check]     update /dev/raid (--check: only report whether an update exists)
+  raidpoint doctor [--fix]       health check (tools, config, keyring, Claude Code hooks/MCP paths); --fix repairs what it can
   raidpoint plugin ls | info|enable|disable|tools <name>   manage MCP plugins (~/.raid_point/plugins)
 """
 import atexit, json, os, sys, time, shutil, subprocess
@@ -156,10 +158,32 @@ def cmd_secret(a):
     import getpass
     sub, proj = (a + ["", ""])[:2]; name = a[2] if len(a) > 2 else ""
     if sub == "set" and name:
-        print("ok" if core.secret_set(proj, name, getpass.getpass(f"value of {name}: ")) else "failed")
+        if "--stdin" in a:            # non-interactive (used by `secret sync`): the value comes from stdin, never from argv. (`echo x |` adds a newline: use printf)
+            v = sys.stdin.read()          # EXACT bytes (no trimming): a sync must reproduce the value as it is
+        else: v = getpass.getpass(f"value of {name}: ")
+        print("ok" if core.secret_set(proj, name, v) else "failed")
     elif sub == "list": print("\n".join(core.secret_names(proj)))
     elif sub == "rm" and name: print("ok" if core.secret_rm(proj, name) else "failed")
+    elif sub == "sync" and proj: cmd_secret_sync(proj)
     else: print(__doc__)
+
+def cmd_secret_sync(host):
+    """push every local project secret to another machine's keyring (over ssh, value via stdin; only NAMES are printed).
+    Extra ssh options (a key, a port) go in DEVRAID_SSH_OPTS."""
+    import shlex
+    ssh = ["ssh", "-o", "BatchMode=yes", *shlex.split(os.environ.get("DEVRAID_SSH_OPTS", "")), host]
+    sent = failed = 0
+    for proj in core.load_projects():
+        for name in core.secret_names(proj):
+            v = core.secret_get(proj, name)
+            if v is None: print(f"  - {proj}/{name}: could not read locally"); failed += 1; continue
+            remote = "PATH=$HOME/.local/bin:/usr/local/bin:$PATH raidpoint secret set " + core._q([proj, name, "--stdin"])
+            r = subprocess.run([*ssh, remote], input=v, text=True, capture_output=True, timeout=60)
+            ok = r.returncode == 0 and r.stdout.strip().endswith("ok")
+            print(f"  {'✓' if ok else '✗'} {proj}/{name}" + ("" if ok else f"  ({(r.stderr or r.stdout).strip()[-100:] or 'failed'})"))
+            sent += ok; failed += (not ok)
+    print(f"{sent} secret(s) sent to {host}" + (f", {failed} failed" if failed else ""))
+    sys.exit(1 if failed else 0)
 
 def cmd_transcript(a):
     path, follow = a[0], "-f" in a
@@ -207,6 +231,119 @@ def cmd_install():
         t = _re.sub(r"\n?\[mcp_servers\.(termos|raidpoint)\]\n(?:[^\[\n][^\n]*\n?)*", "", t)
         t += f'\n[mcp_servers.raidpoint]\ncommand = "{SELF}"\nargs = ["mcp"]\n'
         open(cp, "w").write(t); print("MCP Codex: ok")
+
+# ------------------------------------------------------------------ health check
+def _claude_integration():
+    """(stale_hook_cmds, has_current_hook, mcp_cmd, statusline_cmd) for Claude Code"""
+    sp = os.path.expanduser("~/.claude/settings.json"); stale, cur = [], False; sl = None
+    try:
+        st = json.load(open(sp))
+        for ev, lst in st.get("hooks", {}).items():
+            for g in lst:
+                for h in g.get("hooks", []):
+                    c = h.get("command", "")
+                    if c.endswith("raidpoint hook") or " raidpoint hook" in c:
+                        if c.split()[0] == SELF: cur = True
+                        else: stale.append(c.split()[0])
+        c = (st.get("statusLine") or {}).get("command", "")
+        if "raidpoint statusline" in c: sl = c.split()[0]
+    except Exception: pass
+    mcp = None
+    try: mcp = json.load(open(os.path.expanduser("~/.claude.json"))).get("mcpServers", {}).get("raidpoint", {}).get("command")
+    except Exception: pass
+    return stale, cur, mcp, sl
+
+def doctor_checks():
+    out = []
+    def add(level, name, detail=""): out.append({"level": level, "name": name, "detail": detail})
+    r = subprocess.run([sys.executable, "-c", 'import sys, gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91"); '
+                        'sys.exit(0 if sys.version_info >= (3,11) else 1)'], capture_output=True)
+    add("ok" if r.returncode == 0 else "fail", "Python 3.11+ with GTK4 and VTE",
+        "" if r.returncode == 0 else "install python-gobject, gtk4 and vte4 (vte291-gtk4 on Fedora)")
+    for exe, lvl, why in (("tmux", "fail", "sessions"), ("git", "fail", "projects, diff, update"), ("ssh", "fail", "servers"),
+                          ("gh", "warn", "GitHub repos, CI and PRs"), ("secret-tool", "warn", "project secrets (libsecret)"),
+                          ("mosh", "warn", "remote projects over mosh")):
+        add("ok" if shutil.which(exe) else lvl, exe, "" if shutil.which(exe) else f"not found: needed for {why}")
+    cfg = core.load_config()
+    for key, default, label in (("editor", "nvim", "editor"), ("file_manager", "ranger", "file manager")):
+        want = (cfg.get("tools", {}).get(key) or default).split()[0]
+        got = core.configured_editor(cfg) if key == "editor" else core.configured_file_manager(cfg)
+        if shutil.which(want): add("ok", f"{label}: {want}")
+        else: add("warn", f"{label}: {want} not found", f"using: {got}" if got else "none available: install " + default)
+    if shutil.which("gh"):
+        add("ok" if core.gh_ok() else "warn", "GitHub login (gh)", "" if core.gh_ok() else "run: gh auth login")
+    if shutil.which("secret-tool"):
+        try:
+            p = subprocess.run(["secret-tool", "lookup", "service", "raidpoint-doctor", "probe", "none"], capture_output=True, text=True, timeout=10)
+            bad = p.returncode != 0 and any(x in p.stderr for x in ("autolaunch", "ServiceUnknown", "org.freedesktop.secrets", "Cannot"))
+        except Exception: bad = True
+        add("warn" if bad else "ok", "Secret Service (keyring)", "no keyring running: install/start gnome-keyring; secrets cannot be stored" if bad else "")
+    try:
+        cp = core.HOME / "config.toml"
+        if cp.exists():
+            import tomllib; tomllib.loads(cp.read_text())
+        add("ok", "config.toml")
+    except Exception as e: add("fail", "config.toml is invalid", str(e)[:120])
+    pe = core.projects_error()
+    add("ok" if not pe else "fail", "projects.json", pe or "")
+    stale, cur, mcp, sl = _claude_integration()
+    if os.path.exists(os.path.expanduser("~/.claude/settings.json")):
+        if stale: add("fail", "Claude Code hooks point to a path that is not this install", f"{len(stale)} stale entr{'y' if len(stale) == 1 else 'ies'}, e.g. {stale[0]}")
+        if not cur: add("warn", "Claude Code hooks not registered for this install", "run: raidpoint doctor --fix")
+        if cur and not stale: add("ok", "Claude Code hooks")
+        if sl and sl != SELF: add("fail", "Claude Code statusLine points to another path", sl)
+        if mcp is None: add("warn", "MCP not registered in Claude Code", "run: raidpoint doctor --fix")
+        elif mcp != SELF: add("fail", "MCP in Claude Code points to another path", mcp)
+        else: add("ok", "MCP in Claude Code")
+    else:
+        add("ok", "Claude Code not configured here", "skipped")
+    mode = core.install_mode(); ic = core.installed_commit()
+    add("ok" if (ic or mode == "package") else "warn", f"update tracking ({mode})",
+        f"installed commit {ic[:7]}" if ic else ("managed by the package manager" if mode == "package" else "unknown version: run install.sh once"))
+    return out
+
+def _doctor_fix():
+    """fixes stale/missing integration paths; returns the list of what it did"""
+    did = []
+    sp = os.path.expanduser("~/.claude/settings.json")
+    if os.path.exists(sp):
+        s = json.load(open(sp)); changed = False
+        for ev, lst in list(s.get("hooks", {}).items()):
+            for g in lst:
+                keep = [h for h in g.get("hooks", []) if not (("raidpoint hook" in h.get("command", "")) and h["command"].split()[0] != SELF)]
+                if len(keep) != len(g.get("hooks", [])): g["hooks"] = keep; changed = True
+            s["hooks"][ev] = [g for g in lst if g.get("hooks")]
+            if not s["hooks"][ev]: del s["hooks"][ev]
+        sl = s.get("statusLine") or {}
+        if "raidpoint statusline" in sl.get("command", "") and sl["command"].split()[0] != SELF:
+            sl["command"] = f"{SELF} statusline"; changed = True
+        if changed:
+            shutil.copy(sp, sp + ".raidpoint.bak"); core.write_json_atomic(sp, s); did.append("removed stale Claude Code hooks/statusLine")
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            try: cmd_install()
+            except Exception as e: did.append(f"hook registration failed: {e}")
+        cj = os.path.expanduser("~/.claude.json")
+        try:
+            c = json.load(open(cj))
+            if c.get("mcpServers", {}).get("raidpoint", {}).get("command") != SELF:
+                shutil.copy(cj, cj + ".raidpoint.bak")
+                c.setdefault("mcpServers", {})["raidpoint"] = {"type": "stdio", "command": SELF, "args": ["mcp"], "env": {}}
+                core.write_json_atomic(cj, c); did.append("pointed the MCP at this install")
+        except Exception as e: did.append(f"MCP not fixed: {e}")
+    return did
+
+def cmd_doctor(a):
+    fix = "--fix" in a
+    if fix:
+        for d in _doctor_fix(): print(f"fixed: {d}")
+    res = doctor_checks()
+    if "--json" in a: print(json.dumps(res)); sys.exit(1 if any(c["level"] == "fail" for c in res) else 0)
+    sym = {"ok": "\033[32m✓\033[0m", "warn": "\033[33m!\033[0m", "fail": "\033[31m✗\033[0m"}
+    for c in res: print(f"  {sym[c['level']]} {c['name']}" + (f"  — {c['detail']}" if c["detail"] else ""))
+    bad = [c for c in res if c["level"] == "fail"]
+    print(("\n%d problem(s). " % len(bad) + ("" if fix else "Try: raidpoint doctor --fix")) if bad else "\nall good" + (" (some warnings)" if any(c["level"] == "warn" for c in res) else ""))
+    sys.exit(1 if bad else 0)
 
 # ------------------------------------------------------------------ projects (terminal)
 def cmd_ls():
@@ -279,6 +416,7 @@ def main():
     elif c == "secret": cmd_secret(a[1:])
     elif c == "transcript": cmd_transcript(a[1:])
     elif c == "install": cmd_install()
+    elif c == "doctor": cmd_doctor(a[1:])
     elif c == "update":
         r = core.check_update(apply="--check" not in a)
         print(f"[{r['status']}] {r['msg']}"); sys.exit(1 if r["status"] == "error" else 0)

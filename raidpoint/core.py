@@ -26,6 +26,7 @@ CONFIG_DEFAULT = {
     "terminal": {"font": "Noto Sans Mono 11", "zoom_step": 0.1, "theme": "Catppuccin Mocha",
                  "accent": "Theme default", "cursor": "Block", "cursor_blink": False},
     "window": {"sidebar_width": 190},
+    "tools": {"editor": "nvim", "file_manager": "ranger"},
     "updates": {"auto": True},
     # the AI you chat with: "claude-code" (headless Claude Code) or "http" (see docs/orchestrator.md)
     "orchestrator": {"provider": "claude-code", "url": "", "token_secret": "", "token_file": "", "token_env": ""},
@@ -33,6 +34,7 @@ CONFIG_DEFAULT = {
     "keys": {
         "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
         "agents_panel": "<Control>j", "sidebar": "<Control>b", "chat": "<Control><Shift>k",
+        "editor": "<Control>e", "files": "<Control><Shift>f", "quick_open": "<Control>p",
         "zoom_in": "<Control>plus", "zoom_out": "<Control>minus", "zoom_reset": "<Control>0",
         "copy": "<Control><Shift>c", "paste": "<Control><Shift>v",
     },
@@ -276,6 +278,46 @@ def list_panes(project):
                     "active": f[5] == "1", "pid": f[6], "idle_s": age})
     return out
 
+# ---------------------------------------------------------------- sessions (the Sessions tab)
+SESS_FMT = "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{session_activity}"
+SESS_PANE_FMT = "#{session_name}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}"
+SHELLS = {"bash", "zsh", "fish", "sh", "dash", "ksh", "nu", "tmux", "login", "-bash", "-zsh", "-fish"}
+
+def parse_sessions(sess_out, panes_out, now=None):
+    """tmux output -> [{name, windows, attached, created, activity, panes, busy:[commands], cwd, state}]
+    state: 'open' (a client is attached) | 'busy' (detached, something running) | 'idle' (detached, only shells)"""
+    now = now or time.time(); by = {}
+    for l in sess_out.splitlines():
+        f = l.split("\t")
+        if len(f) < 5: continue
+        try: w, a, c, act = int(f[1]), int(f[2]), int(f[3]), int(f[4])
+        except ValueError: continue
+        by[f[0]] = {"name": f[0], "windows": w, "attached": a, "created": c, "activity": act,
+                    "panes": 0, "busy": [], "cwd": "", "age_s": max(0, int(now - act))}
+    for l in panes_out.splitlines():
+        f = l.split("\t")
+        if len(f) < 4 or f[0] not in by: continue
+        d = by[f[0]]; d["panes"] += 1
+        if not d["cwd"]: d["cwd"] = f[2]
+        cmd = f[1].strip()
+        if cmd and cmd not in SHELLS and cmd not in d["busy"]: d["busy"].append(cmd)
+    for d in by.values():
+        d["state"] = "open" if d["attached"] else ("busy" if d["busy"] else "idle")
+    return sorted(by.values(), key=lambda d: d["name"].lower())
+
+def sessions_info():
+    s = tmux_local("list-sessions", "-F", SESS_FMT)
+    if s.returncode != 0: return []                     # no tmux server running = no sessions
+    p = tmux_local("list-panes", "-a", "-F", SESS_PANE_FMT)
+    return parse_sessions(s.stdout, p.stdout if p.returncode == 0 else "")
+
+def kill_session(name):
+    return tmux_local("kill-session", "-t", f"={name}").returncode == 0
+
+def dur_short(sec):
+    return "now" if sec < 10 else (f"{sec}s" if sec < 60 else (f"{sec // 60}m" if sec < 3600 else
+           (f"{sec // 3600}h" if sec < 86400 else f"{sec // 86400}d")))
+
 def resolve_pane(project, target):
     ps = list_panes(project)
     for p in ps:
@@ -329,6 +371,83 @@ def spawn_pane(project, title, cmd="", worktree=False, layout="tiled", cwd=None)
     run_tmux(project, "select-pane", "-t", pid, "-T", title)
     run_tmux(project, "select-layout", "-t", tgt(project), layout)
     return pid, d, None
+
+# ---------------------------------------------------------------- terminal editor (nvim/micro) & file manager (ranger/nnn)
+EDITORS = ["nvim", "micro", "hx", "vim", "nano"]
+FILE_MANAGERS = ["ranger", "nnn", "yazi", "lf"]
+
+def configured_editor(cfg=None):
+    cfg = cfg if cfg is not None else load_config()
+    ed = (cfg.get("tools", {}).get("editor") or "nvim").strip()
+    exe = shlex.split(ed)[0] if ed else "nvim"
+    if shutil.which(exe):
+        return ed
+    for cand in EDITORS:
+        if shutil.which(cand):
+            return cand
+    return ed or "nvim"
+
+def configured_file_manager(cfg=None):
+    cfg = cfg if cfg is not None else load_config()
+    fm = (cfg.get("tools", {}).get("file_manager") or "ranger").strip()
+    exe = shlex.split(fm)[0] if fm else "ranger"
+    if shutil.which(exe):
+        return fm
+    for cand in FILE_MANAGERS:
+        if shutil.which(cand):
+            return cand
+    return fm or "ranger"
+
+def editor_cmd(filepath=None, line=None, cfg=None):
+    """Build the command to open `filepath` (optionally at `line`) in the configured terminal editor (nvim/micro/etc.)."""
+    ed = configured_editor(cfg)
+    base = os.path.basename(shlex.split(ed)[0]) if ed else "nvim"
+    env_prefix = f"EDITOR={shlex.quote(ed)} VISUAL={shlex.quote(ed)} "
+    if not filepath:
+        return env_prefix + (f"{ed} ." if base in ("nvim", "vim", "hx") else ed)
+    qpath = shlex.quote(str(filepath))
+    if line and int(line) > 0:
+        ln = int(line)
+        if base == "micro":
+            return f"{env_prefix}{ed} +{ln}:1 {qpath}"
+        if base in ("hx", "helix"):
+            return f"{env_prefix}{ed} {shlex.quote(f'{filepath}:{ln}')}"
+        return f"{env_prefix}{ed} +{ln} {qpath}"
+    return f"{env_prefix}{ed} {qpath}"
+
+def file_manager_cmd(target_dir=None, cfg=None):
+    """Build the command to launch ranger/nnn with EDITOR and VISUAL set to the configured editor."""
+    fm = configured_file_manager(cfg)
+    ed = configured_editor(cfg)
+    base_fm = os.path.basename(shlex.split(fm)[0]) if fm else "ranger"
+    # For nnn, -e opens text files in $VISUAL/$EDITOR (nvim/micro) instead of xdg-open
+    extra = " -e" if base_fm == "nnn" and " -e" not in fm else ""
+    dir_arg = f" {shlex.quote(str(target_dir))}" if target_dir else ""
+    return f"EDITOR={shlex.quote(ed)} VISUAL={shlex.quote(ed)} {fm}{extra}{dir_arg}"
+
+def open_in_tmux_editor(project, filepath=None, line=None, cwd=None, layout="tiled", cfg=None):
+    """Open `filepath` (or the project folder) in the configured terminal editor inside a tmux pane."""
+    ed = configured_editor(cfg)
+    ed_name = os.path.basename(shlex.split(ed)[0]) if ed else "editor"
+    title = f"{ed_name}: {os.path.basename(filepath)}" if filepath else ed_name
+    d = cwd or (os.path.dirname(os.path.abspath(filepath)) if filepath else pdir(project))
+    cmd = editor_cmd(filepath, line, cfg)
+    return spawn_pane(project, title, cmd, worktree=False, layout=layout, cwd=d)
+
+def open_in_tmux_fm(project, cwd=None, layout="tiled", cfg=None, wt_label=None):
+    """Open (or focus an existing) ranger/nnn file navigator pane in the project or worktree."""
+    fm = configured_file_manager(cfg)
+    fm_name = os.path.basename(shlex.split(fm)[0]) if fm else "files"
+    title = f"{fm_name} [{wt_label}]" if wt_label and wt_label != "main" else fm_name
+    # If an identical file-manager pane is already open in this project, focus it
+    for p in list_panes(project):
+        if p["title"] == title and p["cmd"] == fm_name:
+            run_tmux(project, "select-window", "-t", f"={sess(project)}:{p['window']}")
+            run_tmux(project, "select-pane", "-t", p["id"])
+            return p["id"], p["path"], None
+    d = cwd or pdir(project)
+    cmd = file_manager_cmd(None, cfg)
+    return spawn_pane(project, title, cmd, worktree=False, layout=layout, cwd=d)
 
 # ---------------------------------------------------------------- orchestration
 PROMPT_ARG = {"claude", "codex", "gemini", "cursor-agent", "opencode"}   # CLIs that accept the task as an initial argument
@@ -855,6 +974,74 @@ def git_commit(d, msg, paths=None):
     r = _git(d, "commit", "-m", msg, "--", *(paths or []) ) if paths else _git(d, "commit", "-m", msg)
     return r.returncode == 0, (r.stdout + r.stderr).strip()
 
+_IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "target", "dist", "build", ".mypy_cache", ".pytest_cache"}
+
+def project_files(d, limit=3000):
+    """tracked + untracked (non-ignored) relative file paths in folder d"""
+    if not d or not os.path.isdir(d): return []
+    r = _git(d, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    if r.returncode == 0:
+        out = [p for p in r.stdout.split("\0") if p and os.path.isfile(os.path.join(d, p))]
+        return sorted(set(out))[:limit]
+    out = []
+    for root, dirs, files in os.walk(d):
+        dirs[:] = [x for x in sorted(dirs) if x not in _IGNORE_DIRS and not x.startswith(".")]
+        for f in sorted(files):
+            rel = os.path.relpath(os.path.join(root, f), d)
+            out.append(rel)
+            if len(out) >= limit: return out
+    return out
+
+def git_line_diff(d, path):
+    """1-based line markers vs HEAD: {line_no: 'add' | 'mod' | 'del'}"""
+    if not d or not path: return {}
+    r = _git(d, "diff", "-U0", "HEAD", "--", path)
+    if r.returncode != 0: return {}
+    marks = {}
+    for ln in r.stdout.splitlines():
+        if not ln.startswith("@@"): continue
+        m = re.match(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", ln)
+        if not m: continue
+        old_cnt = int(m.group(2)) if m.group(2) is not None else 1
+        new_start = int(m.group(3))
+        new_cnt = int(m.group(4)) if m.group(4) is not None else 1
+        if new_cnt == 0 and old_cnt > 0:
+            marks[max(1, new_start)] = "del"
+        else:
+            kind = "mod" if old_cnt > 0 else "add"
+            for i in range(new_start, new_start + new_cnt):
+                marks[i] = kind
+    return marks
+
+def git_first_changed_line(d, path):
+    """first 1-based line changed in `path` vs HEAD (1 if none or untracked)"""
+    marks = git_line_diff(d, path)
+    return min(marks) if marks else 1
+
+def git_merge_worktree(main_dir, wt_dir):
+    """merge an agent worktree branch into main_dir (--no-ff); returns (ok, message)"""
+    if os.path.realpath(main_dir) == os.path.realpath(wt_dir):
+        return False, "already on main"
+    br = _git(wt_dir, "symbolic-ref", "--short", "HEAD").stdout.strip()
+    if not br: return False, "worktree has no branch (detached HEAD)"
+    if git_changes(wt_dir):
+        return False, f"worktree '{br}' has uncommitted changes; commit or revert them first"
+    r = _git(main_dir, "merge", "--no-edit", br)
+    return r.returncode == 0, (r.stdout + "\n" + r.stderr).strip()
+
+def git_remove_worktree(main_dir, wt_dir, force=False):
+    """remove an agent worktree and delete its branch if merged (or if force); returns (ok, message)"""
+    if os.path.realpath(main_dir) == os.path.realpath(wt_dir):
+        return False, "cannot remove the main checkout"
+    br = _git(wt_dir, "symbolic-ref", "--short", "HEAD").stdout.strip()
+    args = ["worktree", "remove"] + (["--force"] if force else []) + [wt_dir]
+    r = _git(main_dir, *args)
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout).strip()
+    if br and br.startswith("agent/"):
+        _git(main_dir, "branch", "-D" if force else "-d", br)
+    return True, f"removed {os.path.basename(wt_dir)}"
+
 def git_detail_cached(d, ttl=60):
     ts, v = _GD.get(d, (0, None))
     if time.time() - ts > ttl:
@@ -887,66 +1074,103 @@ def install_mode():
 def _app_git(*a, timeout=60):
     return subprocess.run(["git", "-C", str(APP_ROOT), *a], text=True, capture_output=True, timeout=timeout)
 
-def _latest_release():
-    import urllib.request
-    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
-                                 headers={"User-Agent": "devraid-updater", "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read())["tag_name"]
+COMMIT_FILE = APP_ROOT / "COMMIT"      # written by install.sh/make: the GitHub commit this install was built from
+BRANCH = "main"
 
-def check_update(apply=True):
-    """Checks for (and, if apply, installs) a newer version.
-    Returns {"status": "updated"|"available"|"current"|"skipped"|"error", "msg": str, "version": str|None}."""
+def installed_commit():
+    """hash of the installed code: HEAD of the checkout, or the COMMIT file (None if unknown, e.g. a copied/dirty tree)"""
+    if (APP_ROOT / ".git").exists():
+        h = _app_git("rev-parse", "HEAD").stdout.strip()
+        return h or None
+    try: return COMMIT_FILE.read_text().strip() or None
+    except Exception: return None
+
+def _gh_api(path, accept="application/vnd.github+json"):
+    import urllib.request
+    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/{path}",
+                                 headers={"User-Agent": "devraid-updater", "Accept": accept})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read().decode()
+
+def _res(status, msg, frm=None, to=None, count=None, subject=None):
+    return {"status": status, "msg": msg, "version": subject or to, "from": frm, "to": to, "count": count, "subject": subject}
+
+def check_update(apply=False):
+    """Compares the installed commit with GitHub's main (a different hash that is AHEAD of yours = update).
+    By default it only CHECKS; apply=True installs. Returns {"status": "updated"|"available"|"current"|"skipped"|"error", "msg", "from", "to", "count", "subject"}."""
     mode = install_mode()
     try:
         if mode == "package":
-            return {"status": "skipped", "msg": "installed by the system package manager; update it there", "version": None}
+            return _res("skipped", "installed by the system package manager; update it there")
         if mode == "git":
             if _app_git("fetch", "--quiet").returncode != 0:
-                return {"status": "error", "msg": "git fetch failed", "version": None}
+                return _res("error", "git fetch failed")
             if not _app_git("rev-parse", "--abbrev-ref", "@{u}").stdout.strip():
-                return {"status": "skipped", "msg": "current branch has no upstream", "version": None}
+                return _res("skipped", "current branch has no upstream")
+            frm = _app_git("rev-parse", "--short", "HEAD").stdout.strip()
             behind = int(_app_git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or 0)
             if not behind:
-                return {"status": "current", "msg": "already up to date", "version": None}
-            new = _app_git("log", "-1", "--format=%h %s", "@{u}").stdout.strip()
+                return _res("current", "already up to date", frm, frm)
+            to = _app_git("rev-parse", "--short", "@{u}").stdout.strip()
+            subj = _app_git("log", "-1", "--format=%s", "@{u}").stdout.strip()
             if not apply:
-                return {"status": "available", "msg": f"{behind} new commit(s): {new}", "version": new}
+                return _res("available", f"{behind} new commit(s): {subj}", frm, to, behind, subj)
             if _app_git("status", "--porcelain", "--untracked-files=no").stdout.strip():
-                return {"status": "skipped", "msg": "local changes in the checkout; not pulling", "version": new}
-            r = _app_git("pull", "--ff-only", "--quiet")
-            if r.returncode != 0:
-                return {"status": "skipped", "msg": "branch diverged from upstream; not pulling", "version": new}
-            return {"status": "updated", "msg": f"pulled {behind} commit(s): {new}", "version": new}
-        # release install (curl | sh): reinstall the newest tag into the same prefix
-        tag = _latest_release()
-        if _ver(tag) <= _ver(VERSION):
-            return {"status": "current", "msg": f"already on the latest release ({VERSION})", "version": tag}
+                return _res("skipped", "local changes in the checkout; not pulling", frm, to, behind, subj)
+            if _app_git("pull", "--ff-only", "--quiet").returncode != 0:
+                return _res("skipped", "branch diverged from upstream; not pulling", frm, to, behind, subj)
+            return _res("updated", f"pulled {behind} commit(s): {subj}", frm, to, behind, subj)
+        # installed copy (install.sh): hash-based, straight from GitHub main
+        cur = installed_commit()
+        if not cur:
+            return _res("skipped", "unknown installed version (copied tree): run install.sh once to enable update tracking")
+        head = _gh_api(f"commits/{BRANCH}", "application/vnd.github.sha").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            return _res("error", "unexpected answer from GitHub")
+        if head == cur:
+            return _res("current", "already up to date", cur[:7], head[:7])
+        count = subj = None
+        try:
+            cmp = json.loads(_gh_api(f"compare/{cur}...{head}"))
+            if cmp.get("status") in ("behind", "identical"):       # you are ahead of main (dev build): nothing to install
+                return _res("current", "this install is not behind main", cur[:7], head[:7])
+            count = cmp.get("ahead_by"); cs = cmp.get("commits") or []
+            if cs: subj = (cs[-1]["commit"]["message"] or "").splitlines()[0]
+        except Exception:
+            pass                                                   # unknown base commit: still offer the update
+        if not subj:
+            subj = (json.loads(_gh_api(f"commits/{head}"))["commit"]["message"] or "").splitlines()[0]
         if not apply:
-            return {"status": "available", "msg": f"{tag} is available (you have {VERSION})", "version": tag}
+            return _res("available", f"{count or 'new'} change(s): {subj}", cur[:7], head[:7], count, subj)
         prefix = APP_ROOT.parent.parent                 # PREFIX/lib/devraid -> PREFIX
         import tempfile, urllib.request
         with tempfile.TemporaryDirectory() as td:
             sh = Path(td) / "install.sh"
-            urllib.request.urlretrieve(f"https://raw.githubusercontent.com/{REPO}/{tag}/install.sh", sh)
-            env = dict(os.environ, DEVRAID_REF=tag, DEVRAID_PREFIX=str(prefix))
+            urllib.request.urlretrieve(f"https://raw.githubusercontent.com/{REPO}/{head}/install.sh", sh)
+            env = dict(os.environ, DEVRAID_REF=head, DEVRAID_PREFIX=str(prefix), DEVRAID_YES="1", DEVRAID_NO_RESTART="1")
             r = subprocess.run(["sh", str(sh)], env=env, stdin=subprocess.DEVNULL, text=True,
                                capture_output=True, timeout=600)
         if r.returncode != 0:
-            return {"status": "error", "msg": (r.stderr or r.stdout).strip()[-300:], "version": tag}
-        return {"status": "updated", "msg": f"updated to {tag}", "version": tag}
+            return _res("error", (r.stderr or r.stdout).strip()[-300:], cur[:7], head[:7], count, subj)
+        return _res("updated", f"updated to {head[:7]}: {subj}", cur[:7], head[:7], count, subj)
     except Exception as e:
-        return {"status": "error", "msg": str(e)[:300], "version": None}
+        return _res("error", str(e)[:300])
 
-def auto_update(force=False):
-    """Background auto-update, throttled to once every UPDATE_EVERY seconds. Returns check_update()'s result or None."""
-    if not force and not load_config().get("updates", {}).get("auto", True):
+def update_check_due():
+    """result of a CHECK (never installs) unless auto-check is off or the user chose to skip that exact version"""
+    if not load_config().get("updates", {}).get("auto", True):
         return None
+    res = check_update(apply=False)
     try: st = json.loads(UPDATE_STATE.read_text())
     except Exception: st = {}
-    if not force and time.time() - st.get("last", 0) < UPDATE_EVERY:
-        return None
-    res = check_update(apply=True)
-    try: write_json_atomic(UPDATE_STATE, {"last": time.time(), **res})
+    try: write_json_atomic(UPDATE_STATE, {**st, "last": time.time(), "status": res["status"], "to": res.get("to")})
     except Exception: pass
+    if res["status"] == "available" and res.get("to") and res["to"] == st.get("skip"):
+        return None
     return res
+
+def skip_update(to):
+    try: st = json.loads(UPDATE_STATE.read_text())
+    except Exception: st = {}
+    try: write_json_atomic(UPDATE_STATE, {**st, "skip": to})
+    except Exception: pass

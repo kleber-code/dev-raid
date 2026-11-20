@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=/dev/raid (terminal here)
+Comment=Open a terminal in this folder (or the project's session)
+Exec=@BIN@/devraid here %f
+Icon=devraid
+Terminal=false
+NoDisplay=true
+MimeType=inode/directory;
+StartupWMClass=br.com.satela.DevRaid

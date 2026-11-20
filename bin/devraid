@@ -2,6 +2,8 @@
 """devraid - single entry point of /dev/raid.
 
   devraid                 open the app (window)
+  devraid here [dir]      terminal in a folder (or that project's session); also: devraid term
+  devraid ssh <host>      connect to a server (alias or user@host) in a persistent session
   devraid <command> ...   CLI: ls, add, rm, open, repos, usage, mem, secret, mcp, hook, install, update, ...
   devraid --version
 """
@@ -18,6 +20,12 @@ def main():
     if not a or a[0] in ("gui", "--gui"):
         target = os.path.join(HERE, "devraid-gui")
         os.execv(sys.executable, [sys.executable, target])
+    if a[0] in ("here", "term", "--here"):       # plain terminal in a folder (default: current), or that project's session
+        d = os.path.abspath(os.path.expanduser(a[1])) if len(a) > 1 else os.getcwd()
+        os.execv(sys.executable, [sys.executable, os.path.join(HERE, "devraid-gui"), "--here", d])
+    if a[0] == "ssh":                            # connect to a server in a persistent session: devraid ssh <host|user@host>
+        if len(a) < 2: sys.exit("usage: devraid ssh <host | user@host>")
+        os.execv(sys.executable, [sys.executable, os.path.join(HERE, "devraid-gui"), "--ssh", a[1]])
     target = os.path.join(HERE, "raidpoint")
     os.execv(sys.executable, [sys.executable, target, *a])
 

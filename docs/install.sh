@@ -5,9 +5,10 @@
 #   wget -qO-  https://kleber-code.github.io/dev-raid/install.sh | sh
 #
 # Options (environment variables, or arguments after `sh -s --`):
-#   DEVRAID_REF=v0.2.0     version (tag or branch). Default: the latest release; if none, main
+#   DEVRAID_REF=<ref>      commit, tag or branch. Default: main (the app offers updates by comparing commit hashes)
 #   DEVRAID_PREFIX=...     where to install. Default: ~/.local (no sudo). E.g.: /usr/local
 #   DEVRAID_YES=1          do not ask before installing system dependencies
+#   DEVRAID_NO_RESTART=1   do not restart the running app afterwards (the app does that itself, after asking)
 #   DEVRAID_SRC=/path      use this checkout instead of downloading (development/offline)
 #   --uninstall            remove /dev/raid (does not delete ~/.raid_point, where your data lives)
 #
@@ -39,7 +40,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 if [ "$ACTION" = "uninstall" ]; then
   say "removing from $PREFIX"
   rm -rf "$PREFIX/lib/devraid"
-  rm -f  "$PREFIX/bin/devraid" "$PREFIX/bin/raidpoint" "$PREFIX/share/applications/br.com.satela.DevRaid.desktop" \
+  rm -f  "$PREFIX/bin/devraid" "$PREFIX/bin/raidpoint" "$PREFIX/share/applications/br.com.satela.DevRaid.desktop" "$PREFIX/share/applications/br.com.satela.DevRaid.Here.desktop" \
          "$PREFIX/share/icons/hicolor/scalable/apps/devraid.svg" "$PREFIX/share/metainfo/br.com.satela.DevRaid.metainfo.xml"
   for s in 512 256 128 64 48 32 16; do rm -f "$PREFIX/share/icons/hicolor/${s}x${s}/apps/devraid.png"; done
   say "done. Your data is still in ~/.raid_point (delete it by hand if you want)."
@@ -51,6 +52,11 @@ download() {   # download URL DEST
   if have curl; then curl -fsSL "$1" -o "$2"
   elif have wget; then wget -qO "$2" "$1"
   else die "curl or wget is required."; fi
+}
+sha_of() {   # commit hash (40 hex) of a ref on GitHub; empty if it cannot be resolved
+  u="https://api.github.com/repos/$REPO/commits/$1"
+  if have curl; then curl -fsSL -H "Accept: application/vnd.github.sha" "$u" 2>/dev/null
+  elif have wget; then wget -qO- --header="Accept: application/vnd.github.sha" "$u" 2>/dev/null; fi | grep -E '^[0-9a-f]{40}$' | head -n1
 }
 fetch_stdout() {
   if have curl; then curl -fsSL "$1"; elif have wget; then wget -qO- "$1"; else die "curl or wget is required."; fi
@@ -94,14 +100,13 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 if [ -n "$SRC" ]; then
   [ -f "$SRC/Makefile" ] || die "DEVRAID_SRC=$SRC does not look like the /dev/raid source."
   DIR="$SRC"; say "using $DIR"
+  SHA=""; if [ -d "$SRC/.git" ] && git -C "$SRC" diff --quiet HEAD 2>/dev/null; then SHA="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)"; fi
 else
-  if [ -z "$REF" ]; then
-    REF="$(fetch_stdout "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-           | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
-    [ -n "$REF" ] || REF="main"
-  fi
-  say "downloading $REPO @ $REF"
-  download "https://codeload.github.com/$REPO/tar.gz/$REF" "$TMP/src.tar.gz"
+  [ -n "$REF" ] || REF="main"
+  # pin the download to an exact commit (immutable: main may move while we install) and remember it for update checks
+  SHA="$(sha_of "$REF" || true)"
+  say "downloading $REPO @ ${SHA:-$REF}"
+  download "https://codeload.github.com/$REPO/tar.gz/${SHA:-$REF}" "$TMP/src.tar.gz"
   tar -xzf "$TMP/src.tar.gz" -C "$TMP"
   DIR="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n1)"
   [ -f "$DIR/Makefile" ] || die "the downloaded archive has no Makefile (does ref '$REF' exist?)."
@@ -109,7 +114,7 @@ fi
 
 # ---------------------------------------------------------------- install
 say "installing into $PREFIX"
-make -s -C "$DIR" install PREFIX="$PREFIX"
+make -s -C "$DIR" install PREFIX="$PREFIX" COMMIT="${SHA:-}"
 have update-desktop-database && update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
 have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true
 
@@ -117,6 +122,14 @@ case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *) warn "$PREFIX/bin is not in your PATH. Add this to your shell:  export PATH=\"$PREFIX/bin:\$PATH\"" ;;
 esac
+
+# health check: fixes what an update/migration leaves behind (stale hooks/MCP paths, missing tools) and shows the result
+say "health check"
+"$PREFIX/bin/raidpoint" doctor --fix || warn "some checks failed (see above); run: raidpoint doctor"
+# if the app is open, restart it into the new version (the tmux sessions survive)
+if [ "${DEVRAID_NO_RESTART:-0}" != 1 ] && have gapplication && gapplication list-actions br.com.satela.DevRaid 2>/dev/null | grep -qx restart; then
+  say "restarting the running app (your sessions stay open)"; gapplication action br.com.satela.DevRaid restart || true
+fi
 
 printf '\n\033[1;32m/dev/raid installed.\033[0m  Next steps:\n\n'
 printf '  gh auth login        # once (repository list, CI and PRs)\n'
