@@ -314,7 +314,10 @@ def cmd_transcript(a):
 def cmd_install():
     # 1) Claude Code hooks (removes the old "termos" ones)
     sp = os.path.expanduser("~/.claude/settings.json")
-    s = json.load(open(sp)); shutil.copy(sp, sp + ".raidpoint.bak")
+    if os.path.exists(sp):
+        s = json.load(open(sp)); shutil.copy(sp, sp + ".raidpoint.bak")
+    else:                                    # fresh machine/user: Claude Code has not written its settings yet
+        os.makedirs(os.path.dirname(sp), exist_ok=True); s = {}
     hooks = s.setdefault("hooks", {})
     cmd = f"{SELF} hook"
     for ev, lst in list(hooks.items()):
@@ -329,9 +332,11 @@ def cmd_install():
     core.write_json_atomic(sp, s)
     print("Claude Code hooks: ok (backup in settings.json.raidpoint.bak)")
     # 2) MCP in Claude Code
-    subprocess.run(["claude", "mcp", "remove", "--scope", "user", "termos"], capture_output=True)
-    r = subprocess.run(["claude", "mcp", "add", "--scope", "user", "raidpoint", "--", SELF, "mcp"], text=True, capture_output=True)
-    print("MCP Claude Code:", (r.stdout + r.stderr).strip()[:160] or "ok")
+    if shutil.which("claude"):
+        subprocess.run(["claude", "mcp", "remove", "--scope", "user", "termos"], capture_output=True)
+        r = subprocess.run(["claude", "mcp", "add", "--scope", "user", "raidpoint", "--", SELF, "mcp"], text=True, capture_output=True)
+        print("MCP Claude Code:", (r.stdout + r.stderr).strip()[:160] or "ok")
+    else: print("MCP Claude Code: skipped (claude not found in PATH; run `raidpoint install` again after installing it)")
     # 3) MCP in Codex
     import re as _re
     cp = os.path.expanduser("~/.codex/config.toml")
