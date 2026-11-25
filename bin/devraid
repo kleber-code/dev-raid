@@ -17,6 +17,10 @@ def main():
     a = sys.argv[1:]
     if a[:1] in (["--version"], ["-V"], ["version"]):
         print(f"devraid {VERSION}"); return
+    if (not a or a[0] in ("gui", "--gui", "here", "term", "--here", "ssh")) and not os.path.exists(os.path.join(HERE, "devraid-gui")):
+        # server install (install.sh --headless): there is no window, everything is the CLI
+        if a: sys.exit("this is a server install of /dev/raid (no app). See: devraid help")
+        os.execv(sys.executable, [sys.executable, os.path.join(HERE, "raidpoint"), "help"])
     if not a or a[0] in ("gui", "--gui"):
         target = os.path.join(HERE, "devraid-gui")
         os.execv(sys.executable, [sys.executable, target])

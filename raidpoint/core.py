@@ -28,6 +28,12 @@ CONFIG_DEFAULT = {
     "window": {"sidebar_width": 190},
     "tools": {"editor": "nvim", "file_manager": "ranger"},
     "updates": {"auto": True},
+    # what every agent is told about git: "push" (commit and push), "commit" (commit only) or "off"; `rules` is your own
+    # extra text, added to every briefing (house rules: commit style, language, what never to touch...)
+    "agents": {"git": "push", "rules": ""},
+    # where project secrets live: "keyring" (Secret Service) or "file" (0600 files in ~/.raid_point/secrets, for servers
+    # without a keyring). RAIDPOINT_SECRETS overrides it.
+    "secrets": {"backend": "keyring"},
     # the AI you chat with: "claude-code" (headless Claude Code) or "http" (see docs/orchestrator.md)
     "orchestrator": {"provider": "claude-code", "url": "", "token_secret": "", "token_file": "", "token_env": ""},
     # GTK format: "<Control>d", "<Control><Shift>p"...  ("" disables)
@@ -372,6 +378,48 @@ def spawn_pane(project, title, cmd="", worktree=False, layout="tiled", cwd=None)
     run_tmux(project, "select-layout", "-t", tgt(project), layout)
     return pid, d, None
 
+# ---------------------------------------------------------------- running without the app (servers)
+def headless():
+    """True on an install without the GTK app (install.sh --headless) or with RAIDPOINT_HEADLESS=1"""
+    return os.environ.get("RAIDPOINT_HEADLESS") == "1" or not (Path(__file__).resolve().parent.parent / "bin" / "devraid-gui").exists()
+
+def startup_cmd(project, entry):
+    """a project `startup` entry -> (pane title, command): an agent preset name (agents.json) or a raw command"""
+    entry = str(entry).strip()
+    ag = {a["name"].lower(): a for a in agents_cfg()}.get(entry.lower())
+    if ag: return ag["name"], agent_launch_cmd(ag, "", project)[0]
+    try: title = os.path.basename(shlex.split(entry)[0])
+    except (ValueError, IndexError): title = "startup"
+    return title, entry
+
+def up(names=None, everything=False):
+    """start (detached) the tmux sessions that should be running, each with its `startup` panes: the projects in `names`,
+    or every local project with a `startup` list or "autostart": true (everything=True: all local projects).
+    Sessions already running are left alone. Returns [(project, status)]."""
+    on = alive(); out = []
+    for n, p in load_projects().items():
+        st = [e for e in (p.get("startup") or []) if str(e).strip()]
+        if names:
+            if n not in names: continue
+        elif p.get("host") or not (everything or st or p.get("autostart")) or (p.get("term") and not st): continue
+        if p.get("host"): out.append((n, "skipped: remote project")); continue
+        if sess(n) in on: out.append((n, "already running")); continue
+        d = os.path.expanduser(p.get("dir") or "~")
+        if not os.path.isdir(d): out.append((n, f"skipped: folder not found ({d})")); continue
+        first = startup_cmd(n, st[0]) if st else None
+        a = ["new-session", "-d", "-s", sess(n), "-c", d] + ([agent_shell_cmd(first[1])] if first and first[1] else [])
+        r = tmux_local(*a)
+        if r.returncode != 0: out.append((n, "failed: " + (r.stderr or "tmux").strip()[-160:])); continue
+        if first: tmux_local("select-pane", "-t", tgt(n), "-T", first[0])
+        errs = []
+        for e in st[1:]:
+            title, cmd = startup_cmd(n, e)
+            if not spawn_pane(n, title, cmd)[0]: errs.append(title)
+        out.append((n, f"started ({len(st)} startup pane(s))" + (f"; could not open: {', '.join(errs)}" if errs else "")))
+    for n in (names or []):
+        if n not in load_projects(): out.append((n, "unknown project"))
+    return out
+
 # ---------------------------------------------------------------- terminal editor (nvim/micro) & file manager (ranger/nnn)
 EDITORS = ["nvim", "micro", "hx", "vim", "nano"]
 FILE_MANAGERS = ["ranger", "nnn", "yazi", "lf"]
@@ -502,7 +550,7 @@ ORCHESTRATOR_PROMPT = (
     "instructions in `prompt`; pick the agent (Claude or Codex) by the kind of work and check `usage` so you don't exceed the quota; "
     "3) follow along with `list_agents` and `read_output`, and use `send_message` only to course-correct; "
     "4) when they all finish, summarize what each one did and list the agent/* branches for me to review in Ctrl+G. "
-    "Do NOT merge or push on your own. For now, just confirm you understood and wait for my task."
+    "The agents commit on their own agent/* branches; do NOT merge into the main branch on your own. For now, just confirm you understood and wait for my task."
 )
 
 # ---------------------------------------------------------------- events
@@ -612,6 +660,27 @@ MEM_PROTOCOL = (
 CLI_FALLBACK = ("If the `raidpoint` MCP tools are not available in your harness, use the CLI: "
                 "`raidpoint mem search|add|recent <project> ...`, `raidpoint secret list <project>`.")
 
+GIT_PROTOCOL = {
+    "commit": ("Git protocol: commit your work as you go, in small logical commits with a clear message, and never end a task "
+               "with uncommitted changes. Only commit what you changed (leave files someone else was editing alone). Do not push."),
+    "push": ("Git protocol: commit your work as you go, in small logical commits with a clear message, and never end a task with "
+             "uncommitted or unpushed work. Only commit what you changed (leave files someone else was editing alone). After "
+             "committing, `git push` the branch you are on (`git push -u origin <branch>` the first time); in an agent/* worktree "
+             "push that branch and leave the merge to the human or the orchestrator. Never force-push or rewrite pushed history: "
+             "if the push is rejected, `git pull --rebase` and push again, and if it still fails say so clearly instead of "
+             "leaving the work only on this machine."),
+}
+
+def working_rules(git=True, cfg=None):
+    """rules every agent gets in its briefing: the git protocol ([agents] git) and the user's own text ([agents] rules)"""
+    a = (cfg or load_config()).get("agents") or {}
+    out = []
+    g = GIT_PROTOCOL.get(str(a.get("git", "push")).strip().lower())
+    if g and git: out.append(g)
+    extra = str(a.get("rules") or "").strip()
+    if extra: out.append(extra)
+    return out
+
 def _git_out(d, *a):
     try: return subprocess.run(["git", "-C", d, *a], text=True, capture_output=True, timeout=10).stdout.strip()
     except Exception: return ""
@@ -654,7 +723,10 @@ def briefing(project, secrets=False):
     out = [f"# /dev/raid briefing — project '{project}'",
            "You are an AI agent running inside /dev/raid, the operational center for this machine's projects and agents. "
            "The human sees all agents side by side and can read your panes.",
-           "", "## Project context", *ctx,
+           "", "## Project context", *ctx]
+    rules = working_rules(git=bool(c.get("branch") or c.get("remote")))
+    if rules: out += ["", "## Working rules", *rules]
+    out += [
            "", "## Your tools (MCP server `raidpoint`)", _tool_lines(), CLI_FALLBACK,
            "Use `spawn_agent` with worktree=true for parallel work so agents never edit the same checkout. You only ever see secret "
            "NAMES, never values; `run_with_secrets` injects them into one command after the human approves.",
@@ -713,6 +785,7 @@ def agents_md_block():
         "agents opened elsewhere should follow this.", "",
         "### Tools (MCP server `raidpoint`)", _tool_lines(), "", CLI_FALLBACK, "",
         "### Memory", "Start with `memory_recent` to see what is known. " + MEM_PROTOCOL, "",
+        *[x for r in working_rules() for x in (r, "")],
         "Secrets: you only see NAMES (`secret_names`); never ask for or print a value. Parallel agents: `spawn_agent` with worktree=true.",
         AGENTS_END, ""])
 
@@ -750,21 +823,53 @@ def _bump_rev(project):
     d = _json_file(SECRETS_REV); d[project] = int(d.get(project, 0)) + 1
     write_json_atomic(SECRETS_REV, d)
 
+SECRETS_DIR = HOME / "secrets"                 # file backend: one 0600 JSON per project ({name: value})
+
+def secrets_backend():
+    """'keyring' (Secret Service, the default) or 'file' (servers without a keyring): RAIDPOINT_SECRETS or [secrets] backend"""
+    b = os.environ.get("RAIDPOINT_SECRETS") or (load_config().get("secrets") or {}).get("backend") or "keyring"
+    return "file" if str(b).strip().lower() == "file" else "keyring"
+
+def _sfile(project):
+    from urllib.parse import quote
+    return SECRETS_DIR / (quote(project, safe="") + ".json")
+
+def _sread(project):
+    return {k: v for k, v in _json_file(_sfile(project)).items() if isinstance(v, str)}
+
+def _swrite(project, d):
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True); os.chmod(SECRETS_DIR, 0o700)
+    f = _sfile(project)
+    if not d: f.unlink(missing_ok=True); return
+    tmp = str(f) + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)      # never readable by others, not even for an instant
+    with os.fdopen(fd, "w") as fh: json.dump(d, fh, ensure_ascii=False)
+    os.chmod(tmp, 0o600); os.replace(tmp, f)
+
 def secret_set(project, name, value):
+    if secrets_backend() == "file":
+        if not (project and name): return False
+        d = _sread(project); d[name] = value; _swrite(project, d); _bump_rev(project); return True
     r = _st("store", "--label", f"raidpoint:{project}:{name}", "service", "raidpoint", "project", project, "name", name, inp=value)
     if r.returncode == 0: _bump_rev(project)
     return r.returncode == 0
 
 def secret_get(project, name):
+    if secrets_backend() == "file": return _sread(project).get(name) or None
     r = _st("lookup", "service", "raidpoint", "project", project, "name", name)
     return r.stdout if r.returncode == 0 and r.stdout else None
 
 def secret_rm(project, name):
+    if secrets_backend() == "file":
+        d = _sread(project)
+        if name not in d: return False
+        del d[name]; _swrite(project, d); _bump_rev(project); return True
     ok = _st("clear", "service", "raidpoint", "project", project, "name", name).returncode == 0
     if ok: _bump_rev(project)
     return ok
 
 def secret_names(project):
+    if secrets_backend() == "file": return sorted(_sread(project))
     r = _st("search", "--all", "service", "raidpoint", "project", project)
     return sorted(set(re.findall(r"attribute\.name = (.+)", r.stdout + r.stderr)))
 
@@ -802,8 +907,29 @@ def redact(text, values):
             text = text.replace(shlex.quote(v), "«secret»")
     return text
 
+def pending_requests(max_age=130):
+    """approval requests still waiting for the human (oldest first)"""
+    out = []
+    for f in REQDIR.glob("*.json"):
+        try: r = json.loads(f.read_text())
+        except Exception: continue
+        if isinstance(r, dict) and r.get("status") == "pending" and time.time() - r.get("ts", 0) <= max_age: out.append(r)
+    return sorted(out, key=lambda r: r.get("ts", 0))
+
+def answer_request(rid, ok):
+    """approve/deny a pending request by id (or a unique prefix of it). Returns the request, or None if there is no such one"""
+    hit = [r for r in pending_requests() if str(r.get("id", "")).startswith(rid)] if re.fullmatch(r"[0-9a-f]{1,10}", rid or "") else []
+    if len(hit) != 1: return None
+    r = hit[0]; f = REQDIR / f"{r['id']}.json"
+    try:
+        if json.loads(f.read_text()).get("status") != "pending": return None       # someone (the app) answered first
+        r["status"] = "approved" if ok else "denied"; f.write_text(json.dumps(r))
+    except Exception: return None
+    return r
+
 def ask_approval(kind, project, detail, timeout=120):
-    """ask the /dev/raid app for human approval (dialog). No app running = denied."""
+    """ask the human for approval: a dialog in the /dev/raid app, or `raidpoint approvals` on a machine without the app.
+    Nobody answering = denied."""
     rid = uuid.uuid4().hex[:10]
     f = REQDIR / f"{rid}.json"
     f.write_text(json.dumps({"id": rid, "kind": kind, "project": project, "detail": detail,
@@ -1292,6 +1418,7 @@ def check_update(apply=False):
             sh = Path(td) / "install.sh"
             urllib.request.urlretrieve(f"https://raw.githubusercontent.com/{REPO}/{head}/install.sh", sh)
             env = dict(os.environ, DEVRAID_REF=head, DEVRAID_PREFIX=str(prefix), DEVRAID_YES="1", DEVRAID_NO_RESTART="1")
+            if not (APP_ROOT / "bin" / "devraid-gui").exists(): env["DEVRAID_HEADLESS"] = "1"     # a server install stays one
             r = subprocess.run(["sh", str(sh)], env=env, stdin=subprocess.DEVNULL, text=True,
                                capture_output=True, timeout=600)
         if r.returncode != 0:

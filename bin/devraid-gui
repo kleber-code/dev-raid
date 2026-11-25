@@ -7,7 +7,7 @@ from gi.repository import Gtk, Vte, GLib, Gdk, Gio, Pango
 
 _HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(_HERE, ".."))
-from raidpoint import core
+from raidpoint import core, bridge
 from raidpoint.chat_ui import ChatPanel, CHAT_CSS
 RAIDPOINT = os.path.join(_HERE, "raidpoint")
 
@@ -524,6 +524,8 @@ class App(Gtk.Application):
         env += ["TERM=xterm-256color", "COLORTERM=truecolor"]
         if p.get("host"):
             argv, cwd = core.remote_argv(name, p), os.path.expanduser("~")
+            try: bridge.start_detached(p["host"])          # reverse tunnel so remote agents can reach /dev/raid here
+            except Exception: pass
         else:
             d = os.path.expanduser(p["dir"])
             argv, cwd = TMUX + ["new-session", "-A", "-s", core.sess(name), "-c", d], (d if os.path.isdir(d) else os.path.expanduser("~"))

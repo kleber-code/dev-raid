@@ -91,6 +91,30 @@ devraid ssh <host>     # server from ~/.ssh/config or user@host, in a persistent
 The app is single-instance: both commands reuse the open window. The launcher also has a "New terminal" action, and a
 folder entry for "Open with" in file managers.
 
+## On a server, 24/7 (no app)
+
+/dev/raid also runs on a machine with no desktop: the same projects, hooks, MCP tools, memory and briefing, driven from the terminal.
+
+```
+curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | sh -s -- --headless
+devraid install                      # hooks + MCP in Claude Code / Codex
+devraid add api ~/code/api           # a project
+devraid startup api Claude           # what should be running in it (agent presets or commands)
+devraid service install              # sessions come back after a reboot
+devraid up                           # start them now; `devraid api` attaches
+```
+
+Requests from agents are answered with `devraid approvals --watch`; without a keyring, `devraid config secrets.backend file` keeps
+secrets in owner-only files. From your desktop, add the server as a remote project (ssh/mosh) and its agents can reach your
+/dev/raid through the [bridge](docs/bridge.md). Details and the security notes: [docs/server.md](docs/server.md).
+
+## What agents are told about git
+
+Agents tend to leave work uncommitted. Every briefing carries a git protocol: commit in small logical commits, never end a task
+with uncommitted or unpushed work, push the current branch, never force-push. Change it with `[agents] git = "push" | "commit" | "off"`
+in `config.toml`, and put your own house rules (commit style, language, what never to touch) in `[agents] rules`: they are told
+to every agent, in every project.
+
 ## Updates and health check
 
 Every time the app opens it checks GitHub: it compares **the commit hash you have with `main`**. If `main` is ahead, it

@@ -26,10 +26,22 @@ install:
 	@if [ -n "$(COMMIT)" ]; then echo "$(COMMIT)" > $(LIBDIR)/COMMIT; else rm -f $(LIBDIR)/COMMIT; fi
 	@echo "ok: $(PREFIX)/bin/devraid"
 
+# server install: the CLI, hooks and MCP only (no GTK app, no desktop files)
+install-headless:
+	install -d $(LIBDIR)/bin $(LIBDIR)/raidpoint $(LIBDIR)/config $(BINDIR)
+	rm -f $(LIBDIR)/bin/devraid-gui
+	install -m755 bin/devraid bin/raidpoint $(LIBDIR)/bin/
+	install -m644 raidpoint/*.py $(LIBDIR)/raidpoint/
+	install -m644 config/* $(LIBDIR)/config/
+	ln -sf ../lib/devraid/bin/devraid   $(BINDIR)/devraid
+	ln -sf ../lib/devraid/bin/raidpoint $(BINDIR)/raidpoint
+	@if [ -n "$(COMMIT)" ]; then echo "$(COMMIT)" > $(LIBDIR)/COMMIT; else rm -f $(LIBDIR)/COMMIT; fi
+	@echo "ok: $(PREFIX)/bin/devraid (server install)"
+
 uninstall:
 	rm -rf $(LIBDIR)
 	rm -f $(BINDIR)/devraid $(BINDIR)/raidpoint $(SHAREDIR)/applications/br.com.satela.DevRaid.desktop $(SHAREDIR)/applications/br.com.satela.DevRaid.Here.desktop
 	rm -f $(SHAREDIR)/icons/hicolor/scalable/apps/devraid.svg $(SHAREDIR)/metainfo/br.com.satela.DevRaid.metainfo.xml
 	for s in $(ICONS); do rm -f $(SHAREDIR)/icons/hicolor/$${s}x$${s}/apps/devraid.png; done
 
-.PHONY: install uninstall
+.PHONY: install install-headless uninstall

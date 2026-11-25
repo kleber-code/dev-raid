@@ -10,6 +10,7 @@
 #   DEVRAID_YES=1          do not ask before installing system dependencies
 #   DEVRAID_NO_RESTART=1   do not restart the running app afterwards (the app does that itself, after asking)
 #   DEVRAID_SRC=/path      use this checkout instead of downloading (development/offline)
+#   --headless             server install (DEVRAID_HEADLESS=1): CLI, hooks and MCP only, no GTK app; needs python3, tmux, git
 #   --uninstall            remove /dev/raid (does not delete ~/.raid_point, where your data lives)
 #
 # Read it before running, if you prefer:  curl -fsSL https://kleber-code.github.io/dev-raid/install.sh | less
@@ -20,12 +21,14 @@ PREFIX="${DEVRAID_PREFIX:-$HOME/.local}"
 REF="${DEVRAID_REF:-}"
 YES="${DEVRAID_YES:-0}"
 SRC="${DEVRAID_SRC:-}"
+HEADLESS="${DEVRAID_HEADLESS:-0}"
 ACTION="install"
 for a in "$@"; do
   case "$a" in
     --uninstall) ACTION="uninstall" ;;
     --yes|-y) YES=1 ;;
-    -h|--help) sed -n '2,15p' "$0" 2>/dev/null || true; exit 0 ;;
+    --headless) HEADLESS=1 ;;
+    -h|--help) sed -n '2,16p' "$0" 2>/dev/null || true; exit 0 ;;
   esac
 done
 
@@ -64,11 +67,16 @@ fetch_stdout() {
 
 # ---------------------------------------------------------------- dependencies
 PY_OK=0
-python3 -c 'import sys, gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91"); sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null && PY_OK=1
-
 missing=""
-[ "$PY_OK" = 1 ] || missing="$missing python3>=3.11+gtk4+vte"
-for c in tmux gh secret-tool tar make; do have "$c" || missing="$missing $c"; done
+if [ "$HEADLESS" = 1 ]; then
+  python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null && PY_OK=1
+  [ "$PY_OK" = 1 ] || missing="$missing python3>=3.11"
+  for c in tmux git tar make; do have "$c" || missing="$missing $c"; done
+else
+  python3 -c 'import sys, gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91"); sys.exit(0 if sys.version_info >= (3,11) else 1)' 2>/dev/null && PY_OK=1
+  [ "$PY_OK" = 1 ] || missing="$missing python3>=3.11+gtk4+vte"
+  for c in tmux gh secret-tool tar make; do have "$c" || missing="$missing $c"; done
+fi
 
 if [ -n "$missing" ]; then
   . /etc/os-release 2>/dev/null || true
@@ -79,6 +87,9 @@ if [ -n "$missing" ]; then
     *debian*|*ubuntu*) PM="apt-get install -y"; PKGS="python3-gi gir1.2-gtk-4.0 gir1.2-vte-3.91 tmux gh libsecret-tools mosh make" ;;
     *) PM=""; PKGS="" ;;
   esac
+  if [ "$HEADLESS" = 1 ] && [ -n "$PM" ]; then
+    case "$fam" in *arch*) PKGS="python tmux git tar make" ;; *) PKGS="python3 tmux git tar make" ;; esac
+  fi
   say "missing:$missing"
   if [ -z "$PM" ]; then
     die "unknown package manager for this distro. Install: GTK4, VTE 3.91 (with PyGObject), tmux, gh, libsecret (secret-tool), make — then run again."
@@ -114,7 +125,11 @@ fi
 
 # ---------------------------------------------------------------- install
 say "installing into $PREFIX"
-make -s -C "$DIR" install PREFIX="$PREFIX" COMMIT="${SHA:-}"
+if [ "$HEADLESS" = 1 ]; then
+  make -s -C "$DIR" install-headless PREFIX="$PREFIX" COMMIT="${SHA:-}"
+else
+  make -s -C "$DIR" install PREFIX="$PREFIX" COMMIT="${SHA:-}"
+fi
 have update-desktop-database && update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
 have gtk-update-icon-cache && gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true
 
@@ -131,6 +146,16 @@ if [ "${DEVRAID_NO_RESTART:-0}" != 1 ] && have gapplication && gapplication list
   say "restarting the running app (your sessions stay open)"; gapplication action br.com.satela.DevRaid restart || true
 fi
 
+if [ "$HEADLESS" = 1 ]; then
+  printf '\n\033[1;32m/dev/raid installed (server, no app).\033[0m  Next steps:\n\n'
+  printf '  devraid install                       # registers hooks and MCP in Claude Code and Codex\n'
+  printf '  devraid add <name> <dir>              # register a project\n'
+  printf '  devraid startup <name> Claude         # what should be running in it\n'
+  printf '  devraid service install               # bring the sessions back after a reboot\n'
+  printf '  devraid up                            # start them now;  devraid <name> attaches\n\n'
+  printf 'Guide: https://github.com/kleber-code/dev-raid/blob/main/docs/server.md\n'
+  exit 0
+fi
 printf '\n\033[1;32m/dev/raid installed.\033[0m  Next steps:\n\n'
 printf '  gh auth login        # once (repository list, CI and PRs)\n'
 printf '  devraid install      # registers hooks and MCP in Claude Code and Codex\n'

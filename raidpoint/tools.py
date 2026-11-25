@@ -2,8 +2,11 @@
 
 Shared by the MCP server (``raidpoint mcp``) and anything else that needs the same tools with the same rules
 (approval for plain shells, secrets never returned, output redaction)."""
-import os, time
+import contextvars, json, os, time
 from . import core
+
+# project to use when a tool call omits 'project' (the bridge sets it per remote host; None = look at the cwd)
+DEFAULT_PROJECT = contextvars.ContextVar("devraid_default_project", default=None)
 
 SHELLS = {"sh", "bash", "zsh", "fish", "dash", "nu"}
 MCP_INSTRUCTIONS = (
@@ -24,7 +27,10 @@ MCP_INSTRUCTIONS = (
 CATALOG_VERSION = "1"      # bump when a tool is renamed or its parameters/output change shape; announced in tools/list _meta
 
 def _proj(a):
-    p = a.get("project") or core.project_for_cwd(os.getcwd())
+    p = a.get("project")
+    if not p:
+        d = DEFAULT_PROJECT.get()
+        p = d if d is not None else core.project_for_cwd(os.getcwd())
     if not p or p not in core.load_projects():
         raise ValueError("project not found; pass 'project' (see list_projects)")
     return p
@@ -149,3 +155,37 @@ TOOLS = {
                              "purpose": {"type": "string"}}, ["command", "secrets"]), t_run_with_secrets),
 }
 
+
+
+def mcp_dispatch(m, allow=None, plugin_host=None, instructions=MCP_INSTRUCTIONS):
+    """one JSON-RPC message -> response dict (None for notifications). Used by `raidpoint mcp` and by the bridge.
+    allow: set of tool names this client may see/call (None = all); plugin_host: callable -> plugins.Host or None"""
+    i, meth = m.get("id"), m.get("method")
+    def ok(r): return {"jsonrpc": "2.0", "id": i, "result": r}
+    def fail(code, msg): return {"jsonrpc": "2.0", "id": i, "error": {"code": code, "message": msg}}
+    visible = {n: v for n, v in TOOLS.items() if allow is None or n in allow}
+    ph = plugin_host() if (plugin_host and allow is None) else None
+    try:
+        params = m.get("params") or {}
+        if meth == "initialize":
+            return ok({"protocolVersion": params.get("protocolVersion", "2024-11-05"), "capabilities": {"tools": {}},
+                       "serverInfo": {"name": "raidpoint", "version": "0.3"}, "instructions": instructions})
+        if meth == "ping":
+            return ok({})
+        if meth == "tools/list":
+            return ok({"tools": [{"name": n, "description": d, "inputSchema": sc} for n, (d, sc, _) in visible.items()]
+                       + (ph.list_tools() if ph else []), "_meta": {"devraid/catalogVersion": CATALOG_VERSION}})
+        if meth == "tools/call":
+            n, a = params.get("name"), params.get("arguments") or {}
+            if n not in visible and ph and n in ph.index:       # plugin tool: already an MCP result
+                return ok(ph.call(n, a))
+            try:
+                if n not in visible: raise ValueError(f"unknown tool: {n}")
+                res = visible[n][2](a)
+            except Exception as e:
+                res = {"error": str(e)}
+            return ok({"isError": isinstance(res, dict) and "error" in res,
+                       "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=1, default=str)}]})
+        return fail(-32601, "unknown method") if i is not None else None
+    except Exception as e:                                       # never takes the server down
+        return fail(-32603, f"internal error: {e}") if i is not None else None

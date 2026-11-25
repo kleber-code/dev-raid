@@ -19,12 +19,20 @@
   raidpoint update [--check]     update /dev/raid (--check: only report whether an update exists)
   raidpoint agents-md [project] [--remove]   add/refresh a managed /dev/raid block in <project>/AGENTS.md (opt-in: edits the repo)
   raidpoint doctor [--fix]       health check (tools, config, keyring, Claude Code hooks/MCP paths); --fix repairs what it can
+  raidpoint bridge install <host> | up <host> | status   let agents on an ssh/mosh host talk to /dev/raid here
+ servers (no app; see docs/server.md):
+  raidpoint up [project ...|--all]      start (detached) the sessions that should be running, with their startup panes
+  raidpoint startup <project> [entry ...|--clear]   what `up` opens in a project: agent preset names or commands
+  raidpoint service install|remove|status           run `raidpoint up` at boot (systemd user unit + linger)
+  raidpoint approvals [--watch]         requests from agents waiting for you (the app shows a dialog instead)
+  raidpoint approve|deny <id>           answer one
+  raidpoint config [section.key [value]]   read or change ~/.raid_point/config.toml (e.g. secrets.backend file)
   raidpoint plugin ls | info|enable|disable|tools <name>   manage MCP plugins (~/.raid_point/plugins)
 """
 import atexit, json, os, sys, time, shutil, subprocess
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
-from raidpoint import core, plugins
-from raidpoint.tools import TOOLS, CATALOG_VERSION, MCP_INSTRUCTIONS
+from raidpoint import core, plugins, bridge
+from raidpoint.tools import TOOLS, CATALOG_VERSION, MCP_INSTRUCTIONS, mcp_dispatch
 
 SELF = os.path.realpath(__file__)
 
@@ -66,40 +74,133 @@ def _host():
     return _HOST
 
 def cmd_mcp():
-    def send(o): sys.stdout.write(json.dumps(o, ensure_ascii=False) + "\n"); sys.stdout.flush()
     for line in sys.stdin:
         try: m = json.loads(line)
         except Exception: continue
         if not isinstance(m, dict): continue
-        i, meth = m.get("id"), m.get("method")
-        try:
-            params = m.get("params") or {}
-            if meth == "initialize":
-                send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                      "capabilities": {"tools": {}}, "serverInfo": {"name": "raidpoint", "version": "0.3"},
-                      "instructions": MCP_INSTRUCTIONS}})
-            elif meth == "ping":
-                send({"jsonrpc": "2.0", "id": i, "result": {}})
-            elif meth == "tools/list":
-                send({"jsonrpc": "2.0", "id": i, "result": {"tools": [
-                    {"name": n, "description": d, "inputSchema": sc} for n, (d, sc, _) in TOOLS.items()] + _host().list_tools(),
-                    "_meta": {"devraid/catalogVersion": CATALOG_VERSION}}})
-            elif meth == "tools/call":
-                n, a = params.get("name"), params.get("arguments") or {}
-                if n not in TOOLS and n in _host().index:       # plugin tool: already an MCP result
-                    send({"jsonrpc": "2.0", "id": i, "result": _host().call(n, a)}); continue
-                try:
-                    if n not in TOOLS: raise ValueError(f"unknown tool: {n}")
-                    res = TOOLS[n][2](a); err = False
-                except Exception as e:
-                    res, err = {"error": str(e)}, True
-                send({"jsonrpc": "2.0", "id": i, "result": {"isError": err or (isinstance(res, dict) and "error" in res),
-                      "content": [{"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=1, default=str)}]}})
-            elif i is not None:
-                send({"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": "unknown method"}})
-        except Exception as e:                                   # never takes the server down
-            if i is not None:
-                send({"jsonrpc": "2.0", "id": i, "error": {"code": -32603, "message": f"internal error: {e}"}})
+        r = mcp_dispatch(m, plugin_host=_host)
+        if r is not None: sys.stdout.write(json.dumps(r, ensure_ascii=False) + "\n"); sys.stdout.flush()
+
+# ------------------------------------------------------------------ bridge
+def cmd_bridge(a):
+    sub, host = (a + ["", ""])[:2]
+    try:
+        if sub == "install" and host: bridge.install(host)
+        elif sub == "up" and host:
+            try: bridge.run(host, log=lambda s: print(time.strftime("%H:%M:%S"), s, flush=True))
+            except KeyboardInterrupt: pass
+        elif sub == "status":
+            d = core.HOME / "bridge"
+            socks = sorted(d.glob("*.sock")) if d.is_dir() else []
+            for s in socks: print(f"{s.stem:<30} {'up' if bridge.serving(s) else 'stale'}")
+            if not socks: print("no bridges running")
+        else: sys.exit("usage: raidpoint bridge install <host> | up <host> | status")
+    except (ValueError, RuntimeError) as e:
+        sys.exit(str(e))
+
+# ------------------------------------------------------------------ servers: sessions at boot, approvals in the terminal
+def cmd_up(a):
+    names = [x for x in a if not x.startswith("--")]
+    res = core.up(names or None, everything="--all" in a)
+    for n, st in res: print(f"  {n:<22} {st}")
+    if not res: print("nothing to start: give a project a startup list (raidpoint startup <project> <agent|command> ...) or use --all")
+    sys.exit(1 if any(st.startswith(("failed", "unknown")) for _, st in res) else 0)
+
+def cmd_startup(a):
+    if not a or a[0] not in core.load_projects(): sys.exit("usage: raidpoint startup <project> [agent preset or command ...] | --clear")
+    name, rest = a[0], a[1:]
+    if rest:
+        new = [] if rest == ["--clear"] else rest
+        core.update_projects(lambda db: db[name].__setitem__("startup", new))
+    st = core.load_projects()[name].get("startup") or []
+    for e in st: print(f"  {core.startup_cmd(name, e)[0]:<16} {e}")
+    if not st: print("no startup panes")
+
+UNIT = os.path.expanduser("~/.config/systemd/user/devraid.service")
+def _sysd(*a): return subprocess.run(["systemctl", "--user", *a], text=True, capture_output=True)
+def _linger():
+    r = subprocess.run(["loginctl", "show-user", str(os.getuid()), "-p", "Linger", "--value"], text=True, capture_output=True)
+    return r.stdout.strip() == "yes"
+
+def cmd_service(a):
+    sub = a[0] if a else ""
+    if not shutil.which("systemctl"): sys.exit("systemd (systemctl) not found")
+    if sub == "install":
+        os.makedirs(os.path.dirname(UNIT), exist_ok=True)
+        # KillMode=process: stopping/removing the unit never kills the sessions it started
+        open(UNIT, "w").write("[Unit]\nDescription=/dev/raid sessions (tmux): projects and their startup agents come back after a reboot\n"
+                              "After=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nKillMode=process\n"
+                              f"ExecStart={SELF} up\n\n[Install]\nWantedBy=default.target\n")
+        _sysd("daemon-reload"); r = _sysd("enable", "devraid.service")
+        if r.returncode: sys.exit(f"could not enable the unit: {(r.stderr or r.stdout).strip()[-200:]}")
+        print(f"unit installed and enabled: {UNIT}")
+        if not _linger(): subprocess.run(["loginctl", "enable-linger"], capture_output=True)
+        print("linger: on (sessions start at boot and survive logout)" if _linger() else
+              f"linger is OFF: without it nothing starts at boot. Run as root:  loginctl enable-linger {os.environ.get('USER') or os.getuid()}")
+        print("start now with: raidpoint up")
+    elif sub == "remove":
+        _sysd("disable", "devraid.service")
+        try: os.remove(UNIT)
+        except FileNotFoundError: pass
+        _sysd("daemon-reload"); print("unit removed (running sessions were left alone)")
+    elif sub == "status":
+        print(f"unit:    {'installed' if os.path.exists(UNIT) else 'not installed'}"
+              + (f", {_sysd('is-enabled', 'devraid.service').stdout.strip() or 'unknown'}" if os.path.exists(UNIT) else ""))
+        print(f"linger:  {'on' if _linger() else 'off'}")
+        on = core.alive()
+        for n, p in core.load_projects().items():
+            st = p.get("startup") or []
+            if st or p.get("autostart"): print(f"  {'●' if core.sess(n) in on else '○'} {n:<22} startup: {', '.join(map(str, st)) or '(session only)'}")
+    else: sys.exit("usage: raidpoint service install|remove|status")
+
+def cmd_config(a):
+    cfg = core.load_config()
+    if not a:
+        for sec, vals in cfg.items():
+            if sec != "keys":
+                for k, v in vals.items(): print(f"{sec}.{k} = {json.dumps(v, ensure_ascii=False)}")
+        return
+    sec, _, key = a[0].partition(".")
+    if not key or sec not in cfg or key not in cfg[sec]: sys.exit(f"unknown setting '{a[0]}' (run `raidpoint config` to list them)")
+    if len(a) == 1: print(cfg[sec][key]); return
+    old, v = cfg[sec][key], " ".join(a[1:])
+    if isinstance(old, bool):
+        if v.lower() not in ("true", "false", "on", "off", "yes", "no", "1", "0"): sys.exit("expected true or false")
+        v = v.lower() in ("true", "on", "yes", "1")
+    elif isinstance(old, (int, float)):
+        try: v = type(old)(v)
+        except ValueError: sys.exit("expected a number")
+    if core.projects_error() is None and (core.HOME / "config.toml").exists():
+        try: __import__("tomllib").loads((core.HOME / "config.toml").read_text())
+        except Exception as e: sys.exit(f"config.toml is invalid, fix it by hand first: {e}")       # never overwrite a file we could not read
+    cfg[sec][key] = v; core.save_config(cfg); print(f"{a[0]} = {json.dumps(v, ensure_ascii=False)}")
+
+def _req_line(r):
+    return f"{r['id']}  [{r.get('kind', '?')}] project {r.get('project')}  ({int(time.time() - r.get('ts', 0))}s ago)"
+
+def cmd_approvals(a):
+    if "--watch" not in a:
+        reqs = core.pending_requests()
+        for r in reqs: print(_req_line(r)); print("    " + str(r.get("detail", "")).replace("\n", "\n    "))
+        print("\nanswer with: raidpoint approve <id>  |  raidpoint deny <id>" if reqs else "no pending requests")
+        return
+    print("waiting for requests from agents (Ctrl+C to leave; unanswered requests are denied after 2 minutes)", flush=True)
+    seen = set()
+    try:
+        while True:
+            for r in core.pending_requests():
+                if r["id"] in seen: continue
+                seen.add(r["id"])
+                print("\a\n" + _req_line(r)); print("    " + str(r.get("detail", "")).replace("\n", "\n    "))
+                ok = input("allow once? [y/N] ").strip().lower() in ("y", "yes")
+                print(("allowed" if ok else "denied") if core.answer_request(r["id"], ok) else "too late: it expired or was answered elsewhere")
+            time.sleep(0.5)
+    except (KeyboardInterrupt, EOFError): print()
+
+def cmd_answer(rid, ok):
+    r = core.answer_request(rid, ok)
+    if not r: sys.exit("no pending request with that id (see: raidpoint approvals)")
+    print(f"{'approved' if ok else 'denied'}: [{r.get('kind')}] project {r.get('project')}")
 
 # ------------------------------------------------------------------ plugins
 def cmd_plugin(a):
@@ -264,13 +365,18 @@ def _claude_integration():
 def doctor_checks():
     out = []
     def add(level, name, detail=""): out.append({"level": level, "name": name, "detail": detail})
-    r = subprocess.run([sys.executable, "-c", 'import sys, gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91"); '
-                        'sys.exit(0 if sys.version_info >= (3,11) else 1)'], capture_output=True)
-    add("ok" if r.returncode == 0 else "fail", "Python 3.11+ with GTK4 and VTE",
-        "" if r.returncode == 0 else "install python-gobject, gtk4 and vte4 (vte291-gtk4 on Fedora)")
-    for exe, lvl, why in (("tmux", "fail", "sessions"), ("git", "fail", "projects, diff, update"), ("ssh", "fail", "servers"),
-                          ("gh", "warn", "GitHub repos, CI and PRs"), ("secret-tool", "warn", "project secrets (libsecret)"),
-                          ("mosh", "warn", "remote projects over mosh")):
+    headless = core.headless(); filesec = core.secrets_backend() == "file"
+    if headless:
+        add("ok" if sys.version_info >= (3, 11) else "fail", "Python 3.11+ (server install, no app)", "" if sys.version_info >= (3, 11) else "upgrade python3")
+    else:
+        r = subprocess.run([sys.executable, "-c", 'import sys, gi; gi.require_version("Gtk","4.0"); gi.require_version("Vte","3.91"); '
+                            'sys.exit(0 if sys.version_info >= (3,11) else 1)'], capture_output=True)
+        add("ok" if r.returncode == 0 else "fail", "Python 3.11+ with GTK4 and VTE",
+            "" if r.returncode == 0 else "install python-gobject, gtk4 and vte4 (vte291-gtk4 on Fedora)")
+    tools_ = [("tmux", "fail", "sessions"), ("git", "fail", "projects, diff, update"), ("gh", "warn", "GitHub repos, CI and PRs")]
+    if not headless: tools_ += [("ssh", "fail", "servers"), ("mosh", "warn", "remote projects over mosh")]
+    if not filesec: tools_.append(("secret-tool", "warn", "project secrets (libsecret)"))
+    for exe, lvl, why in tools_:
         add("ok" if shutil.which(exe) else lvl, exe, "" if shutil.which(exe) else f"not found: needed for {why}")
     cfg = core.load_config()
     for key, default, label in (("editor", "nvim", "editor"), ("file_manager", "ranger", "file manager")):
@@ -280,12 +386,18 @@ def doctor_checks():
         else: add("warn", f"{label}: {want} not found", f"using: {got}" if got else "none available: install " + default)
     if shutil.which("gh"):
         add("ok" if core.gh_ok() else "warn", "GitHub login (gh)", "" if core.gh_ok() else "run: gh auth login")
-    if shutil.which("secret-tool"):
+    if filesec:
+        d = core.SECRETS_DIR
+        loose = [f.name for f in ([d] + list(d.glob("*.json")) if d.exists() else []) if f.stat().st_mode & 0o077]
+        add("fail" if loose else "ok", "secrets: file backend (~/.raid_point/secrets)",
+            f"readable by other users: chmod 700 the folder and 600 the files ({', '.join(loose[:3])})" if loose else "plain files, owner-only")
+    elif shutil.which("secret-tool"):
         try:
             p = subprocess.run(["secret-tool", "lookup", "service", "raidpoint-doctor", "probe", "none"], capture_output=True, text=True, timeout=10)
-            bad = p.returncode != 0 and any(x in p.stderr for x in ("autolaunch", "ServiceUnknown", "org.freedesktop.secrets", "Cannot"))
+            bad = p.returncode != 0 and any(x in p.stderr for x in ("autolaunch", "ServiceUnknown", "org.freedesktop.secrets", "Cannot", "Could not connect", "Error spawning"))
         except Exception: bad = True
-        add("warn" if bad else "ok", "Secret Service (keyring)", "no keyring running: install/start gnome-keyring; secrets cannot be stored" if bad else "")
+        add("warn" if bad else "ok", "Secret Service (keyring)", ("no keyring running: secrets cannot be stored. On a server, set [secrets] backend = \"file\" in ~/.raid_point/config.toml"
+                                                                 if headless else "no keyring running: install/start gnome-keyring; secrets cannot be stored") if bad else "")
     try:
         cp = core.HOME / "config.toml"
         if cp.exists():
@@ -305,6 +417,11 @@ def doctor_checks():
         else: add("ok", "MCP in Claude Code")
     else:
         add("ok", "Claude Code not configured here", "skipped")
+    if headless and shutil.which("systemctl"):
+        if os.path.exists(UNIT):
+            add("ok" if _linger() else "warn", "sessions at boot (systemd unit)", "" if _linger() else
+                f"linger is off, nothing starts at boot: as root run  loginctl enable-linger {os.environ.get('USER') or os.getuid()}")
+        else: add("warn", "sessions at boot", "not set up: raidpoint service install")
     mode = core.install_mode(); ic = core.installed_commit()
     add("ok" if (ic or mode == "package") else "warn", f"update tracking ({mode})",
         f"installed commit {ic[:7]}" if ic else ("managed by the package manager" if mode == "package" else "unknown version: run install.sh once"))
@@ -420,6 +537,13 @@ def main():
     c = a[0] if a else ""
     if c == "hook": cmd_hook()
     elif c == "mcp": cmd_mcp()
+    elif c == "bridge": cmd_bridge(a[1:])
+    elif c == "up": cmd_up(a[1:])
+    elif c == "startup": cmd_startup(a[1:])
+    elif c == "service": cmd_service(a[1:])
+    elif c == "approvals": cmd_approvals(a[1:])
+    elif c == "config": cmd_config(a[1:])
+    elif c in ("approve", "deny") and len(a) == 2: cmd_answer(a[1], c == "approve")
     elif c == "mem": cmd_mem(a[1:])
     elif c == "secret": cmd_secret(a[1:])
     elif c == "transcript": cmd_transcript(a[1:])

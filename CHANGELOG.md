@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- **Runs on a server, without the app:** `install.sh --headless` installs only the CLI, hooks and MCP (python3, tmux and git; no GTK).
+  `raidpoint startup <project> <agent|command>…` says what should run in a project, `raidpoint up` starts those sessions detached,
+  and `raidpoint service install` brings them back after a reboot (systemd user unit + linger). Requests from agents are answered
+  in the terminal (`raidpoint approvals [--watch]`, `approve|deny <id>`), secrets can live in owner-only files where there is no
+  keyring (`[secrets] backend = "file"`), and `raidpoint config` edits settings. `doctor` and `update` know a server install.
+  See `docs/server.md`.
+- **Agents commit and push:** every briefing (and the AGENTS.md block) now carries a git protocol: small commits, nothing left
+  uncommitted or unpushed, never force-push. `[agents] git = "push" | "commit" | "off"`, plus `[agents] rules` for your own
+  house rules, told to every agent.
+- **Bridge:** agents running on an ssh/mosh host can use /dev/raid on your machine (talk to other agents, read their output,
+  project memory) through a reverse tunnel with a restricted tool list. `raidpoint bridge install|up|status`; the app opens the
+  tunnel when you open a remote project. See `docs/bridge.md`.
 - **Fix stray floating shells:** tmux 3.8 binds Ctrl+drag (and `prefix *`, `prefix Tab`, the empty-area right-click menu) to floating panes,
   which fired by accident on Ctrl+click/drag. The default `tmux.conf` now unbinds them. Existing installs keep their own
   `~/.raid_point/tmux.conf`: append the `unbind` block from `config/tmux.conf`.
