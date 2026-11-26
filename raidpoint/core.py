@@ -1449,6 +1449,18 @@ def _gh_api(path, accept="application/vnd.github+json"):
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.read().decode()
 
+def _is_local_dev_ahead(cur, head):
+    """True when a local git repo of /dev/raid has `cur` as an ancestor of HEAD and `head` as an ancestor of `cur`"""
+    candidates = [APP_ROOT, Path.home() / "Projects" / "raid-point"]
+    for p in load_projects().values():
+        if isinstance(p, dict) and p.get("dir"):
+            candidates.append(Path(os.path.expanduser(p["dir"])))
+    for d in candidates:
+        if not (d / ".git").exists():
+            continue
+        if _git(str(d), "merge-base", "--is-ancestor", head, cur).returncode == 0:
+            return True
+    return False
 def _res(status, msg, frm=None, to=None, count=None, subject=None):
     return {"status": status, "msg": msg, "version": subject or to, "from": frm, "to": to, "count": count, "subject": subject}
 
@@ -1486,6 +1498,8 @@ def check_update(apply=False):
             return _res("error", "unexpected answer from GitHub")
         if head == cur:
             return _res("current", "already up to date", cur[:7], head[:7])
+        if _is_local_dev_ahead(cur, head):
+            return _res("current", "this install is ahead of main (local dev commit)", cur[:7], head[:7])
         count = subj = None
         try:
             cmp = json.loads(_gh_api(f"compare/{cur}...{head}"))

@@ -46,6 +46,15 @@ class T(unittest.TestCase):
         core.installed_commit = lambda: A; core._gh_api = FakeGH(B, fail_cmp=True)
         r = core.check_update(); self.assertEqual((r["status"], r["subject"]), ("available", "msg do head"))
 
+    def test_unpushed_local_dev_commit_never_downgrades(self):
+        orig = core._is_local_dev_ahead
+        try:
+            core._is_local_dev_ahead = lambda cur, head: cur == A and head == B
+            core.installed_commit = lambda: A; core._gh_api = FakeGH(B, fail_cmp=True)
+            self.assertEqual(core.check_update()["status"], "current")
+        finally:
+            core._is_local_dev_ahead = orig
+
     def test_unknown_install_never_prompts_or_downgrades(self):
         core.installed_commit = lambda: None; core._gh_api = FakeGH(B)
         self.assertEqual(core.check_update()["status"], "skipped"); self.assertEqual(core._gh_api.calls, [])
