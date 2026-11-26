@@ -189,8 +189,9 @@ class App(Gtk.Application):
 
         # --- title bar: sidebar toggle | project | actions
         hb = Gtk.HeaderBar()
-        self.title_lbl = Gtk.Label(label="/dev/raid"); self.title_lbl.add_css_class("title")
-        self.sub = Gtk.Label(label=""); self.sub.add_css_class("subtitle-git")
+        # ellipsized: a long project name/path/branch must shrink to the window, never widen it past the screen
+        self.title_lbl = Gtk.Label(label="/dev/raid", ellipsize=Pango.EllipsizeMode.MIDDLE, width_chars=8); self.title_lbl.add_css_class("title")
+        self.sub = Gtk.Label(label="", ellipsize=Pango.EllipsizeMode.END); self.sub.add_css_class("subtitle-git")
         tb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         tb.append(self.title_lbl); tb.append(self.sub)
         hb.set_title_widget(tb)
@@ -513,7 +514,7 @@ class App(Gtk.Application):
         setp(lambda d: d.__setitem__("_last", name))
         self.set_sync_ui(name, False); self.refresh_sync(name)
         where = f"{p['host']}:{p.get('dir') or '~'}" if p.get("host") else p["dir"].replace(os.path.expanduser("~"), "~")
-        self.title_lbl.set_label(f"{name}  —  {where}")
+        self.title_lbl.set_label(f"{name}  —  {where}"); self.title_lbl.set_tooltip_text(f"{name}\n{where}")
         if name in self.rows: self.list.select_row(self.rows[name][0])
 
     def spawn(self, name):
@@ -2245,7 +2246,7 @@ class App(Gtk.Application):
         if not name or name not in load(): return
         w = Gtk.Window(title="Rename", transient_for=self.win, modal=True, default_width=360)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=18, margin_bottom=18, margin_start=18, margin_end=18)
-        l = Gtk.Label(label=f"New name for '{name}'", xalign=0); l.add_css_class("side-title")
+        l = Gtk.Label(label=f"New name for '{name}'", xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE, max_width_chars=1); l.add_css_class("side-title")
         e = Gtk.Entry(text=name, activates_default=True); err = Gtk.Label(label="", xalign=0); err.add_css_class("ag-sub")
         ok = Gtk.Button(label="Rename"); ok.add_css_class("agent")
         for x in (l, e, err, ok): box.append(x)
