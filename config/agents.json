@@ -1,7 +1,8 @@
 [
-  {"name": "Claude", "cmd": "claude"},
-  {"name": "Codex",  "cmd": "codex"},
-  {"name": "Aider",  "cmd": "aider"},
-  {"name": "Ollama", "cmd": "ollama run llama3"},
-  {"name": "Shell",  "cmd": ""}
+  {"name": "Claude",      "cmd": "claude"},
+  {"name": "Antigravity", "cmd": "agy"},
+  {"name": "Codex",       "cmd": "codex"},
+  {"name": "Aider",       "cmd": "aider"},
+  {"name": "Ollama",      "cmd": "ollama run llama3"},
+  {"name": "Shell",       "cmd": ""}
 ]

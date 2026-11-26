@@ -36,11 +36,11 @@ CONFIG_DEFAULT = {
     "secrets": {"backend": "keyring"},
     # the AI you chat with: "claude-code" (headless Claude Code) or "http" (see docs/orchestrator.md)
     "orchestrator": {"provider": "claude-code", "url": "", "token_secret": "", "token_file": "", "token_env": ""},
-    # GTK format: "<Control>d", "<Control><Shift>p"...  ("" disables)
+    # GTK format: "<Alt>d", "<Control><Shift>p"...  ("" disables)
     "keys": {
-        "palette": "<Control>d", "settings": "<Control>comma", "changes": "<Control>g",
-        "agents_panel": "<Control>j", "sidebar": "<Control>b", "chat": "<Control><Shift>k",
-        "editor": "<Control>e", "files": "<Control><Shift>f", "quick_open": "<Control>p",
+        "palette": "<Alt>d", "settings": "<Alt>comma", "changes": "<Alt>g",
+        "agents_panel": "<Alt>j", "sidebar": "<Alt>b", "chat": "<Alt>k",
+        "editor": "<Alt>e", "files": "<Alt>f", "quick_open": "<Alt>p",
         "zoom_in": "<Control>plus", "zoom_out": "<Control>minus", "zoom_reset": "<Control>0",
         "copy": "<Control><Shift>c", "paste": "<Control><Shift>v",
     },
@@ -55,6 +55,8 @@ THEMES = {   # background, foreground, 16 colors
                                            "#928374 #fb4934 #b8bb26 #fabd2f #83a598 #d3869b #8ec07c #ebdbb2"),
     "Nord": ("#2e3440", "#d8dee9", "#3b4252 #bf616a #a3be8c #ebcb8b #81a1c1 #b48ead #88c0d0 #e5e9f0 "
                                    "#4c566a #bf616a #a3be8c #ebcb8b #81a1c1 #b48ead #8fbcbb #eceff4"),
+    "Satela Ember": ("#141418", "#e8e6e3", "#1d1d22 #e5534b #82c9a1 #f0b27a #7aa7f0 #c79bf0 #6fd0d0 #e8e6e3 "
+                                           "#5b5b66 #ff6b63 #9fe0ba #ffc896 #9bc0ff #dcb5ff #8fe6e6 #ffffff"),
 }
 
 # INTERFACE colors per theme (the terminal uses THEMES). Keys: background, panel, dark border, lines, gray, text, accent, ...
@@ -67,6 +69,8 @@ THEME_UI = {
                              text="#ebdbb2", accent="#d3869b", green="#b8bb26", red="#fb4934", yellow="#fabd2f", blue="#83a598"),
     "Nord":             dict(bg="#2e3440", mantle="#272c36", crust="#20242d", s0="#3b4252", s1="#434c5e", overlay="#616e88",
                              text="#d8dee9", accent="#b48ead", green="#a3be8c", red="#bf616a", yellow="#ebcb8b", blue="#81a1c1"),
+    "Satela Ember":     dict(bg="#141418", mantle="#101013", crust="#0a0a0c", s0="#24242b", s1="#34343d", overlay="#6b6a72",
+                             text="#e8e6e3", accent="#f0883e", green="#82c9a1", red="#e5534b", yellow="#f2d36b", blue="#7aa7f0"),
 }
 ACCENTS = {"Theme default": None, "Blue": "blue", "Green": "green", "Yellow": "yellow", "Red": "red"}
 CURSORS = ["Block", "Bar", "Underline"]
@@ -159,6 +163,26 @@ def read_projects():
 
 def load_projects():
     return {k: v for k, v in read_projects().items() if isinstance(v, dict)}
+
+def ordered_projects():
+    """project names with pinned projects first, preserving relative order"""
+    db = load_projects()
+    return [n for n, p in db.items() if p.get("pinned")] + [n for n, p in db.items() if not p.get("pinned")]
+
+def pin_project(name, pinned=True):
+    def fn(db):
+        if name not in db or not isinstance(db[name], dict): raise KeyError(name)
+        if pinned: db[name]["pinned"] = True
+        else: db[name].pop("pinned", None)
+    update_projects(fn)
+
+def set_project_note(name, note):
+    note = (note or "").strip()
+    def fn(db):
+        if name not in db or not isinstance(db[name], dict): raise KeyError(name)
+        if note: db[name]["note"] = note
+        else: db[name].pop("note", None)
+    update_projects(fn)
 
 def update_projects(fn):
     """read-modify-write projects.json with a lock and an atomic write. If the file exists but is
@@ -498,20 +522,30 @@ def open_in_tmux_fm(project, cwd=None, layout="tiled", cfg=None, wt_label=None):
     return spawn_pane(project, title, cmd, worktree=False, layout=layout, cwd=d)
 
 # ---------------------------------------------------------------- orchestration
-PROMPT_ARG = {"claude", "codex", "gemini", "cursor-agent", "opencode"}   # CLIs that accept the task as an initial argument
+PROMPT_ARG = {"claude", "agy", "codex", "gemini", "cursor-agent", "opencode"}   # CLIs that accept the task as an initial argument
+
+def _agy_has_hooks():
+    """True when ~/.gemini/config/hooks.json has an enabled raidpoint hook"""
+    try:
+        d = json.loads((Path.home() / ".gemini" / "config" / "hooks.json").read_text())
+        rp = d.get("raidpoint")
+        return isinstance(rp, dict) and rp.get("enabled", True) is not False and bool(rp.get("SessionStart"))
+    except Exception:
+        return False
 
 def agent_launch_cmd(ag, prompt="", project=None):
-    """(command, needs_send_keys). Claude/Codex & co. get the task as an argument (reliable);
+    """(command, needs_send_keys). Claude/Agy/Codex & co. get the task as an argument (reliable);
     the others start empty and the task is sent via send-keys afterwards. A preset can force it with "prompt": "arg"|"keys".
-    With `project`, an agent WITHOUT hooks (Codex, Gemini, Aider...) is pointed at the project briefing; Claude Code gets it
-    through the SessionStart hook instead."""
+    With `project`, an agent WITHOUT hooks (Codex, Gemini, Aider, or agy without hooks) is pointed at the project briefing;
+    Claude Code (and agy with hooks) get it through the SessionStart hook instead."""
     cmd = (ag.get("cmd") or "").strip()
     if not cmd: return cmd, False
     mode = ag.get("prompt")
     try: first = os.path.basename(shlex.split(cmd)[0])
     except (ValueError, IndexError): first = ""
     takes_arg = mode == "arg" or (mode is None and first in PROMPT_ARG)
-    if project and first != "claude" and not load_projects().get(project, {}).get("host"):
+    has_hook = first == "claude" or (first == "agy" and _agy_has_hooks())
+    if project and not has_hook and not load_projects().get(project, {}).get("host"):
         try:
             f = write_briefing(project)
             if first == "aider": cmd = f"{cmd} --read {shlex.quote(str(f))}"      # read-only context file
@@ -523,6 +557,8 @@ def agent_launch_cmd(ag, prompt="", project=None):
             pass                                                  # a briefing problem must never block opening the agent
     if not prompt: return cmd, False
     if takes_arg:
+        if first == "agy":
+            return f"{cmd} -i {shlex.quote(prompt)}", False
         return f"{cmd} {shlex.quote(prompt)}", False
     return cmd, True
 
@@ -547,7 +583,7 @@ ORCHESTRATOR_PROMPT = (
     "You are the ORCHESTRATOR of this project in /dev/raid. When I give you a task: "
     "1) split it into independent parts (that do not edit the same files); "
     "2) for each part, use the `spawn_agent` MCP tool from the `raidpoint` server with worktree=true and the part's "
-    "instructions in `prompt`; pick the agent (Claude or Codex) by the kind of work and check `usage` so you don't exceed the quota; "
+    "instructions in `prompt`; pick the agent (Claude, Antigravity, Codex, or Aider) by the kind of work and check `usage` so you don't exceed the quota; "
     "3) follow along with `list_agents` and `read_output`, and use `send_message` only to course-correct; "
     "4) when they all finish, summarize what each one did and list the agent/* branches for me to review in Ctrl+G. "
     "The agents commit on their own agent/* branches; do NOT merge into the main branch on your own. For now, just confirm you understood and wait for my task."
@@ -713,11 +749,18 @@ def _memory_section(project):
 
 def briefing(project, secrets=False):
     """markdown an agent receives when a session starts: where it is, the project context, its tools and the project memory"""
+    p = load_projects().get(project, {})
     c = project_context(project)
     where = (f"remote server `{c['host']}`, folder `{c['dir']}`" if c.get("remote") else f"`{c['dir']}`")
     ctx = [f"- Folder: {where}"]
+    if p.get("note"):
+        ctx.append(f"- Sticky note: {p['note']}")
     if c.get("branch"):
         ctx.append(f"- Branch `{c['branch']}` · {c['dirty']} changed file(s)" + (f" · origin {c['origin']}" if c.get("origin") else ""))
+    if not c.get("remote") and c.get("dir") and os.path.isdir(c["dir"]):
+        wts = [f"{lbl} ({os.path.basename(wd)})" for lbl, wd in git_targets(c["dir"])[1:]]
+        if wts:
+            ctx.append("- Active worktrees: " + ", ".join(wts))
     if c.get("commits"): ctx.append("- Last commits: " + "; ".join(c["commits"]))
     if c.get("docs"): ctx.append("- Worth reading first: " + ", ".join(c["docs"]))
     out = [f"# /dev/raid briefing — project '{project}'",
@@ -741,6 +784,50 @@ def write_briefing(project):
     f = BRIEFING_DIR / f"{safe_name(project)}.md"
     f.write_text(briefing(project, secrets=True))
     return f
+
+def project_resume(project):
+    """human-friendly 'where was I?' summary for a tired developer returning to a project"""
+    p = load_projects().get(project)
+    if not p:
+        return f"Project '{project}' not found."
+    c = project_context(project)
+    lines = [f"# Resume: {project}" + (" ★" if p.get("pinned") else "")]
+    if p.get("note"):
+        lines.append(f"Note: {p['note']}")
+    where = (f"{c['host']}:{c['dir']}" if c.get("remote") else c.get("dir", ""))
+    lines.append(f"Folder: {where}")
+    if c.get("branch"):
+        lines.append(f"Branch: {c['branch']} ({c['dirty']} uncommitted change(s))")
+    if not c.get("remote") and c.get("dir") and os.path.isdir(c["dir"]):
+        changes = git_changes(c["dir"]) or []
+        if changes:
+            lines.append("Changed files: " + ", ".join(f"{st} {path}" for st, path in changes[:10])
+                         + (f" (+{len(changes) - 10} more)" if len(changes) > 10 else ""))
+        wts = git_targets(c["dir"])[1:]
+        if wts:
+            wt_info = []
+            for lbl, wd in wts:
+                wc = len(git_changes(wd) or [])
+                wt_info.append(f"{lbl} ({wc} dirty)" if wc else lbl)
+            lines.append("Open worktrees: " + ", ".join(wt_info))
+    if c.get("commits"):
+        lines.append("Recent commits:\n  " + "\n  ".join(c["commits"]))
+    panes = list_panes(project)
+    if panes:
+        lines.append("Open panes: " + ", ".join(f"{x['title']} ({x['cmd']})" for x in panes))
+    S = sessions(project)
+    if S:
+        lines.append("AI sessions: " + ", ".join(f"{s['harness']}:{s['status']} ({ago(s['last'])} ago)" for s in S.values()))
+    recent = mem_recent(project, 20)
+    keep = [m for m in recent if m["kind"] != "session"][:5]
+    logs = [m for m in recent if m["kind"] == "session"][:2]
+    if keep or logs:
+        lines.append("Memory:")
+        for m in keep + logs:
+            lines.append(f"  [{m['kind']}] ({m['ts'][:10]}) {m['text'][:200].strip()}")
+    else:
+        lines.append("Memory: (none yet)")
+    return "\n".join(lines) + "\n"
 
 def mem_session_log(project, session_id, evs=None):
     """automatic project log: when a session ends, record what was asked and what changed (no LLM, only facts).

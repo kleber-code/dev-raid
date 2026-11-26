@@ -159,7 +159,7 @@ for line in sys.stdin:
 '''
 
 def install(host, log=print):
-    """copy the shim to the remote and register it as an MCP server in the remote's Claude Code (if present)"""
+    """copy the shim to the remote and register it as an MCP server in Claude Code, Antigravity (agy), and Codex (if present)"""
     check_host(host)
     rhome = remote_home(host)
     shim = f"{rhome}/{REMOTE_SHIM}"
@@ -168,9 +168,15 @@ def install(host, log=print):
                        input=SHIM, text=True, capture_output=True, timeout=60)
     if r.returncode: raise RuntimeError(f"copy failed: {r.stderr.strip()}")
     log(f"shim installed: {host}:{shim}")
-    reg = (f"command -v claude >/dev/null && {{ claude mcp remove --scope user {MCP_NAME} >/dev/null 2>&1; "
-           f"claude mcp add --scope user {MCP_NAME} -- {shlex.quote(shim)} && echo registered; }} || echo no-claude")
+    qshim = shlex.quote(shim)
+    reg = (
+        f"done=''; "
+        f"command -v claude >/dev/null && {{ claude mcp remove --scope user {MCP_NAME} >/dev/null 2>&1; "
+        f"claude mcp add --scope user {MCP_NAME} -- {qshim} && done=\"$done claude\"; }}; "
+        f"command -v agy >/dev/null && {{ agy mcp add {MCP_NAME} -- {qshim} >/dev/null 2>&1 && done=\"$done agy\"; }}; "
+        f"echo \"${{done# }}\""
+    )
     r = subprocess.run(ssh_base(host) + [f"bash -lc {shlex.quote(reg)}"], text=True, capture_output=True, timeout=60)
-    out = r.stdout.strip().splitlines()[-1:] or [""]
-    log("registered in Claude Code on the remote" if out[0] == "registered" else
-        f"Claude Code not found on the remote; point your MCP client at: {shim}")
+    out = (r.stdout.strip().splitlines() or [""])[-1].strip()
+    log(f"registered on the remote in: {out}" if out else
+        f"no supported MCP CLI found on the remote; point your MCP client at: {shim}")

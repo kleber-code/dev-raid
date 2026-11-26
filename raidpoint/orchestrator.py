@@ -177,10 +177,45 @@ class ClaudeCodeProvider(Provider):
         return self.log[-limit:]
 
 
+# ---------------------------------------------------------------- headless Antigravity (agy)
+class AgyProvider(Provider):
+    name = "Antigravity"
+    def __init__(self, project=None):
+        self.session, self.log = None, []
+        d = core.pdir(project) if project else None
+        self.cwd = d if d and os.path.isdir(d) else str(Path.home())
+
+    def send(self, text, on_delta=None):
+        exe = shutil.which("agy")
+        if not exe: raise ProviderError("the `agy` command was not found")
+        cmd = [exe, "-p", "--output-format", "json", "--dangerously-skip-permissions"]
+        if self.session:
+            cmd += ["--resume", self.session]
+        prompt = text if self.session else f"{core.ORCHESTRATOR_PROMPT}\n\nUser request:\n{text}"
+        try:
+            r = subprocess.run(cmd, input=prompt, cwd=self.cwd, text=True, capture_output=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            raise ProviderError("Antigravity did not answer within 15 minutes")
+        try: out = json.loads(r.stdout)
+        except ValueError: out = None
+        if not isinstance(out, dict) or r.returncode != 0 or out.get("is_error"):
+            raise ProviderError(_clean((out or {}).get("result") or (out or {}).get("error") or r.stderr or f"agy exited with {r.returncode}"))
+        sid = out.get("session_id") or out.get("conversationId")
+        if isinstance(sid, str) and sid: self.session = sid
+        answer = out.get("result") if isinstance(out.get("result"), str) else ""
+        now = time.time()
+        self.log += [{"role": "user", "text": text, "ts": now}, {"role": "assistant", "text": answer, "ts": now}]
+        return answer
+
+    def history(self, limit=60):
+        return self.log[-limit:]
+
+
 def get_provider(cfg=None, project=None):
-    """the provider selected in config.toml ([orchestrator] provider = "claude-code" | "http")"""
+    """the provider selected in config.toml ([orchestrator] provider = "claude-code" | "agy" | "http")"""
     cfg = cfg if cfg is not None else core.load_config().get("orchestrator", {})
     kind = (cfg.get("provider") or "claude-code").strip()
     if kind == "http": return HttpProvider(cfg)
+    if kind in ("agy", "antigravity"): return AgyProvider(project)
     if kind == "claude-code": return ClaudeCodeProvider(project)
     raise ProviderError(f"unknown orchestrator provider: {kind!r}")

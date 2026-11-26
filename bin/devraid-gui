@@ -287,11 +287,15 @@ class App(Gtk.Application):
         ssc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER); ssc.set_child(self.slist); ssc.set_overlay_scrolling(False)
         self.scount = Gtk.Label(label="", xalign=0, hexpand=True, margin_start=14, margin_top=8, margin_bottom=4, ellipsize=Pango.EllipsizeMode.END, max_width_chars=1)
         self.scount.add_css_class("ag-sub")
-        self.clean_btn = Gtk.Button(label="Clean up…", has_frame=False, margin_end=8, margin_top=4,
+        self.clean_btn = Gtk.Button(label="Clean up…", has_frame=False, margin_end=4, margin_top=4,
                                     tooltip_text="Choose idle sessions (only shells, nobody attached) to kill")
         self.clean_btn.add_css_class("link-btn")
         self.clean_btn.connect("clicked", lambda *_: self.sessions_cleanup())
-        sh = Gtk.Box(); sh.append(self.scount); sh.append(self.clean_btn)
+        self.kill_all_btn = Gtk.Button(label="Kill all…", has_frame=False, margin_end=8, margin_top=4,
+                                       tooltip_text="Kill all live sessions")
+        self.kill_all_btn.add_css_class("link-btn"); self.kill_all_btn.add_css_class("danger")
+        self.kill_all_btn.connect("clicked", lambda *_: self.session_kill_ui(self._sinfos))
+        sh = Gtk.Box(); sh.append(self.scount); sh.append(self.clean_btn); sh.append(self.kill_all_btn)
         sbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL); sbox.append(sh); sbox.append(ssc)
         self._sinfos = []; self._ssig = None
         self.sstack = Gtk.Stack(vexpand=True); self.sstack.add_named(sc, "proj"); self.sstack.add_named(sbox, "sess")
@@ -406,18 +410,27 @@ class App(Gtk.Application):
         term.set_cursor_shape({"Bar": Vte.CursorShape.IBEAM, "Underline": Vte.CursorShape.UNDERLINE}.get(t.get("cursor"), Vte.CursorShape.BLOCK))
         term.set_cursor_blink_mode(Vte.CursorBlinkMode.ON if t.get("cursor_blink") else Vte.CursorBlinkMode.OFF)
 
+    _APP_ACCELS = (
+        ("palette", "palette"), ("settings", "settings"), ("changes", "changes"),
+        ("agents_panel", "agents"), ("sidebar", "side"), ("chat", "chat"),
+        ("editor", "editor"), ("files", "files"), ("quick_open", "quick_open"),
+    )
+
     def rebuild_binds(self):
         self.binds = {}
         for act in ("zoom_in", "zoom_out", "zoom_reset", "copy", "paste"):
             acc = self.cfg.get("keys", {}).get(act, "")
             ok, kv, md = Gtk.accelerator_parse(acc) if acc else (False, 0, 0)
             if ok: self.binds[(Gdk.keyval_to_lower(kv), int(md))] = act
+        self.app_binds = {}
+        for cfg_key, act_name in self._APP_ACCELS:
+            acc = self.cfg.get("keys", {}).get(cfg_key, "")
+            ok, kv, md = Gtk.accelerator_parse(acc) if acc else (False, 0, 0)
+            if ok: self.app_binds[(Gdk.keyval_to_lower(kv), int(md))] = act_name
 
     def apply_accels(self):
         k = self.cfg.get("keys", {})
-        for act, name in (("palette", "palette"), ("settings", "settings"), ("changes", "changes"),
-                          ("agents_panel", "agents"), ("sidebar", "side"), ("chat", "chat"),
-                          ("editor", "editor"), ("files", "files"), ("quick_open", "quick_open")):
+        for act, name in self._APP_ACCELS:
             acc = k.get(act, "")
             self.set_accels_for_action(f"app.{name}", [acc] if acc else [])
 
@@ -430,7 +443,7 @@ class App(Gtk.Application):
         term.set_colors(f, b, colors)
 
     def names(self):
-        return [n for n, v in load().items() if isinstance(v, dict) and not n.startswith("_")]
+        return [n for n in core.ordered_projects() if not n.startswith("_")]
 
     def avatar(self, name):
         """small colored square with the initial (each color's CSS provider is created only once)"""
@@ -466,8 +479,11 @@ class App(Gtk.Application):
             row = Gtk.ListBoxRow(); row.name = n
             box = Gtk.Box(spacing=10)
             av = self.avatar(n)
-            name_lbl = Gtk.Label(label=("›_ " if db[n].get("term") else "") + n, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+            prefix = ("★ " if db[n].get("pinned") else "") + ("›_ " if db[n].get("term") else "")
+            name_lbl = Gtk.Label(label=prefix + n, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
             name_lbl.add_css_class("name-lbl")
+            if db[n].get("note"):
+                row.set_tooltip_text(db[n]["note"])
             dot = Gtk.Label(label="●")
             dot.add_css_class("dot-remote" if db[n].get("host") else ("dot-on" if core.sess(n) in on else "dot-off"))
             badge = Gtk.Label(label=""); self.badges[n] = badge
@@ -623,6 +639,10 @@ class App(Gtk.Application):
         if act == "zoom_reset": self.set_zoom(1.0); return True
         if act == "copy": self.do_copy(name); return True
         if act == "paste": term.paste_clipboard(); return True
+        app_act = self.app_binds.get((kv, mods))
+        if app_act:
+            self.activate_action(app_act, None)
+            return True
         alt = bool(state & Gdk.ModifierType.ALT_MASK)
         if shift and not ctrl and not alt and keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             term.feed_child(b"\x1b\r"); return True     # Shift+Enter = newline in AI CLIs (VTE would send a plain Enter)
@@ -771,6 +791,14 @@ class App(Gtk.Application):
         add("Orchestrator: chat", "Ctrl+Shift+K", self.toggle_chat)
         add("Project list: show/hide", "Ctrl+B", self.toggle_side)
         add("Project secrets…", "", self.on_secrets)
+        add("Project: where was I? (resume)", "branch, changes, worktrees, memory", self.show_resume)
+        add("Project: pin / unpin", "keep at top of sidebar", lambda: self.toggle_pin(self.cur))
+        add("Project: set sticky note…", "1-line reminder for tired days", lambda: self.on_project_note(self.cur))
+        if self.cur:
+            add("Session: kill current project session…", "close all panes/tabs of this project",
+                lambda: self.session_kill_ui([d for d in self._sinfos if d["name"] == core.sess(self.cur)] or [{"name": core.sess(self.cur), "state": "open", "busy": []}]))
+        add("Sessions: clean up idle…", "choose idle sessions to kill", self.sessions_cleanup)
+        add("Sessions: kill all…", "close every live tmux session", lambda: self.session_kill_ui(self._sinfos))
         add("Project: write AGENTS.md…", "briefing for every agent", self.on_agents_md)
         add("Project: show what agents are told at start", "briefing + memory", self.show_briefing)
         add("Project: rename…", "F2 in the list", self.on_rename)
@@ -1957,6 +1985,7 @@ class App(Gtk.Application):
         self.tab_sess.set_label(f"Sessions · {n}" if n else "Sessions")
         self.scount.set_label((f"{n} live" + (f" · {busy} running" if busy else "")) if n else "")
         self.clean_btn.set_visible(bool(idle))
+        self.kill_all_btn.set_visible(bool(infos))
         sig = json.dumps([[d["name"], d["state"], d["windows"], d["panes"], d["busy"], d["age_s"] // 60, bool(self.sess_project(d["name"]))] for d in infos])
         if sig == self._ssig: return False
         self._ssig = sig
@@ -2241,6 +2270,35 @@ class App(Gtk.Application):
         kc = Gtk.EventControllerKey(); kc.connect("key-pressed", lambda c, kv, kcode, st: (w.close(), True)[1] if kv == Gdk.KEY_Escape else False)
         w.add_controller(kc); w.present()
 
+    def show_resume(self, *_, name=None):
+        name = name or self.cur
+        if not name: return
+        w = Gtk.Window(title=f"Resume — {name}", transient_for=self.win, default_width=680, default_height=480)
+        tv = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD, left_margin=14, right_margin=14, top_margin=12)
+        tv.get_buffer().set_text(core.project_resume(name))
+        sc = Gtk.ScrolledWindow(); sc.set_child(tv); w.set_child(sc)
+        kc = Gtk.EventControllerKey(); kc.connect("key-pressed", lambda c, kv, kcode, st: (w.close(), True)[1] if kv == Gdk.KEY_Escape else False)
+        w.add_controller(kc); w.present()
+
+    def toggle_pin(self, name):
+        if not name or name not in load(): return
+        core.pin_project(name, not bool(load()[name].get("pinned")))
+        self.refresh_list()
+
+    def on_project_note(self, name):
+        if not name or name not in load(): return
+        w = Gtk.Window(title=f"Sticky note — {name}", transient_for=self.win, modal=True, default_width=420)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=18, margin_bottom=18, margin_start=18, margin_end=18)
+        l = Gtk.Label(label=f"1-line sticky note for '{name}' (leave empty to clear)", xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE, max_width_chars=1); l.add_css_class("side-title")
+        e = Gtk.Entry(text=load()[name].get("note", ""), placeholder_text="e.g. fixing auth bug, check tests/auth.py", activates_default=True)
+        ok = Gtk.Button(label="Save"); ok.add_css_class("agent")
+        for x in (l, e, ok): box.append(x)
+        w.set_child(box); w.set_default_widget(ok)
+        def go(*_):
+            core.set_project_note(name, e.get_text()); w.close(); self.refresh_list()
+        ok.connect("clicked", go); e.connect("activate", go)
+        w.present(); e.grab_focus(); e.select_region(0, -1)
+
     def on_rename(self, *_, name=None):
         name = name or self.cur
         if not name or name not in load(): return
@@ -2290,6 +2348,11 @@ class App(Gtk.Application):
             if css: b.add_css_class(css)
             b.connect("clicked", lambda *_: (pop.popdown(), cb())); box.append(b)
         item("Open", lambda: self.open(name))
+        item("Where was I? (Resume)", lambda: self.show_resume(name=name))
+        item("Unpin" if p.get("pinned") else "Pin to top", lambda: self.toggle_pin(name))
+        item("Set sticky note…", lambda: self.on_project_note(name))
+        if not p.get("host") and core.sess(name) in alive():
+            item("Kill session…", lambda: self.session_kill_ui([d for d in self._sinfos if d["name"] == core.sess(name)] or [{"name": core.sess(name), "state": "open", "busy": []}]), "danger")
         item("Rename…  (F2)", lambda: self.on_rename(name=name))
         if not p.get("host") and p.get("dir"):
             item("Open folder", lambda: self.open_uri(os.path.expanduser(p["dir"])))

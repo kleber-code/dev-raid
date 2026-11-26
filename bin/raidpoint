@@ -3,11 +3,14 @@
 
   raidpoint [open] <project>     open/return to the project in the terminal (tmux)
   raidpoint ls | add <name> [dir] | rm <name> | kill <name> | stop
+  raidpoint resume [project]     "where was I?" summary (branch, changes, worktrees, panes, memory)
+  raidpoint pin|unpin <project>  pin/unpin a project to the top of the list
+  raidpoint note <project> [txt] set or clear a 1-line sticky note on a project
   raidpoint repos                list your GitHub repositories
   raidpoint open-repo <owner/repo> clone into ~/.raid_point/workspaces/<repo> and register it as a project
   raidpoint hook                 (harness JSON on stdin; logs an event)
   raidpoint mcp                  stdio MCP server (list_agents, spawn_agent, send_message, ...)
-  raidpoint mem add|search|recent|reindex ...
+  raidpoint mem add|search|recent|reindex|backfill ...
   raidpoint secret set|list|rm <project> [NAME]
   raidpoint secret sync <host>   copy every secret to another machine's keyring (ssh; values never printed)
   raidpoint usage                Claude Code token usage (5h / 24h / 7d, per project)
@@ -15,10 +18,10 @@
   raidpoint install-statusline   enable the statusLine in Claude Code (only if you don't have one)
   raidpoint events               recent events
   raidpoint transcript <file> [-f]
-  raidpoint install              register hooks + MCP in Claude Code and Codex
+  raidpoint install              register hooks + MCP in Claude Code, Antigravity (agy) and Codex
   raidpoint update [--check]     update /dev/raid (--check: only report whether an update exists)
   raidpoint agents-md [project] [--remove]   add/refresh a managed /dev/raid block in <project>/AGENTS.md (opt-in: edits the repo)
-  raidpoint doctor [--fix]       health check (tools, config, keyring, Claude Code hooks/MCP paths); --fix repairs what it can
+  raidpoint doctor [--fix]       health check (tools, config, keyring, Claude/Agy/Codex hooks & MCP paths); --fix repairs what it can
   raidpoint bridge install <host> | up <host> | status   let agents on an ssh/mosh host talk to /dev/raid here
  servers (no app; see docs/server.md):
   raidpoint up [project ...|--all]      start (detached) the sessions that should be running, with their startup panes
@@ -37,14 +40,38 @@ from raidpoint.tools import TOOLS, CATALOG_VERSION, MCP_INSTRUCTIONS, mcp_dispat
 SELF = os.path.realpath(__file__)
 
 # ------------------------------------------------------------------ hook
+def _agy_hook_out(msg=None):
+    if msg:
+        print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": msg}}]}, ensure_ascii=False))
+    else:
+        print("{}")
+
 def cmd_hook():
     try:
         d = json.load(sys.stdin)
     except Exception:
         return
     try:
-        cwd = d.get("cwd") or os.getcwd()
+        is_agy = "hookEventName" in d or "conversationId" in d
+        cwd = d.get("cwd") or (d.get("workspacePaths") or [None])[0] or os.getcwd()
         proj = core.project_for_cwd(cwd)
+        if is_agy:
+            ev = d.get("hookEventName", "?")
+            if not isinstance(ev, str): _agy_hook_out(); return
+            sid = d.get("conversationId")
+            logged_ev = "UserPromptSubmit" if ev == "PreInvocation" else ev
+            prompt = (d.get("lastUserInput") or "")[:80] if ev == "PreInvocation" else None
+            core.log_event({"harness": "agy", "event": logged_ev, "session_id": sid, "cwd": cwd,
+                            "project": proj, "transcript": d.get("transcriptPath"), "prompt": prompt})
+            parts = []
+            if ev == "SessionStart" and proj:
+                parts.append(core.briefing(proj))
+            if ev in ("SessionStart", "PreInvocation") and proj:
+                note = core.secret_announcement(sid, proj, logged_ev)
+                if note: parts.append(note)
+            _agy_hook_out("\n\n".join(parts) if parts else None)
+            return
+
         ev = d.get("hook_event_name", "?")
         if not isinstance(ev, str): return
         core.log_event({"harness": "claude", "event": ev, "session_id": d.get("session_id"), "cwd": cwd,
@@ -311,6 +338,40 @@ def cmd_transcript(a):
             if l: show(l)
             else: time.sleep(0.5)
 
+def _install_agy():
+    cmd = f"{SELF} hook"
+    hp = os.path.expanduser("~/.gemini/config/hooks.json")
+    if os.path.exists(hp):
+        try: hdata = json.load(open(hp))
+        except Exception: hdata = {}
+        shutil.copy(hp, hp + ".raidpoint.bak")
+    else:
+        os.makedirs(os.path.dirname(hp), exist_ok=True); hdata = {}
+    if not isinstance(hdata, dict): hdata = {}
+    hdata["raidpoint"] = {
+        "enabled": True,
+        "SessionStart": [{"type": "command", "command": cmd, "timeout": 10}],
+        "PreInvocation": [{"type": "command", "command": cmd, "timeout": 10}],
+        "Stop": [{"type": "command", "command": cmd, "timeout": 10}],
+    }
+    core.write_json_atomic(hp, hdata)
+    print("Antigravity (agy) hooks: ok (~/.gemini/config/hooks.json)")
+    if shutil.which("agy"):
+        r = subprocess.run(["agy", "mcp", "add", "raidpoint", "--", SELF, "mcp"], text=True, capture_output=True)
+        print("MCP Antigravity (agy):", (r.stdout + r.stderr).strip()[:160] or "ok")
+    else:
+        mp = os.path.expanduser("~/.gemini/config/mcp_config.json")
+        if os.path.exists(mp):
+            try: mdata = json.load(open(mp))
+            except Exception: mdata = {}
+            shutil.copy(mp, mp + ".raidpoint.bak")
+        else:
+            os.makedirs(os.path.dirname(mp), exist_ok=True); mdata = {}
+        if not isinstance(mdata, dict): mdata = {}
+        mdata.setdefault("mcpServers", {})["raidpoint"] = {"command": SELF, "args": ["mcp"]}
+        core.write_json_atomic(mp, mdata)
+        print("MCP Antigravity (agy): ok (~/.gemini/config/mcp_config.json)")
+
 def cmd_install():
     # 1) Claude Code hooks (removes the old "termos" ones)
     sp = os.path.expanduser("~/.claude/settings.json")
@@ -337,14 +398,26 @@ def cmd_install():
         r = subprocess.run(["claude", "mcp", "add", "--scope", "user", "raidpoint", "--", SELF, "mcp"], text=True, capture_output=True)
         print("MCP Claude Code:", (r.stdout + r.stderr).strip()[:160] or "ok")
     else: print("MCP Claude Code: skipped (claude not found in PATH; run `raidpoint install` again after installing it)")
-    # 3) MCP in Codex
+    # 3) Antigravity CLI (agy) hooks + MCP
+    if shutil.which("agy") or os.path.exists(os.path.expanduser("~/.gemini/config")) or os.path.exists(os.path.expanduser("~/.gemini/antigravity-cli")):
+        _install_agy()
+    else:
+        print("Antigravity (agy): skipped (agy not found)")
+    # 4) MCP in Codex
     import re as _re
     cp = os.path.expanduser("~/.codex/config.toml")
-    if os.path.exists(cp):
-        t = open(cp).read(); shutil.copy(cp, cp + ".raidpoint.bak")
+    if os.path.exists(cp) or shutil.which("codex") or os.path.isdir(os.path.expanduser("~/.codex")):
+        os.makedirs(os.path.dirname(cp), exist_ok=True)
+        t = open(cp).read() if os.path.exists(cp) else ""
+        if os.path.exists(cp): shutil.copy(cp, cp + ".raidpoint.bak")
         t = _re.sub(r"\n?\[mcp_servers\.(termos|raidpoint)\]\n(?:[^\[\n][^\n]*\n?)*", "", t)
-        t += f'\n[mcp_servers.raidpoint]\ncommand = "{SELF}"\nargs = ["mcp"]\n'
+        t = (t.rstrip("\n") + "\n\n" if t.strip() else "") + f'[mcp_servers.raidpoint]\ncommand = "{SELF}"\nargs = ["mcp"]\n'
         open(cp, "w").write(t); print("MCP Codex: ok")
+    else:
+        print("MCP Codex: skipped (codex not found)")
+    # 5) Aider
+    if shutil.which("aider"):
+        print("Aider: ok (automatically receives --read <briefing> and CLI fallback when launched in /dev/raid)")
 
 # ------------------------------------------------------------------ health check
 def _claude_integration():
@@ -366,6 +439,37 @@ def _claude_integration():
     try: mcp = json.load(open(os.path.expanduser("~/.claude.json"))).get("mcpServers", {}).get("raidpoint", {}).get("command")
     except Exception: pass
     return stale, cur, mcp, sl
+
+def _agy_integration():
+    """(stale_hook_cmds, has_current_hook, mcp_cmd) for Antigravity CLI (agy)"""
+    hp = os.path.expanduser("~/.gemini/config/hooks.json")
+    stale, cur = [], False
+    try:
+        rp = json.load(open(hp)).get("raidpoint") or {}
+        for ev in ("SessionStart", "PreInvocation", "Stop"):
+            for h in rp.get(ev, []) or []:
+                c = h.get("command", "")
+                if "raidpoint hook" in c:
+                    if c.split()[0] == SELF: cur = True
+                    else: stale.append(c.split()[0])
+    except Exception:
+        pass
+    mcp = None
+    try:
+        mcp = json.load(open(os.path.expanduser("~/.gemini/config/mcp_config.json"))).get("mcpServers", {}).get("raidpoint", {}).get("command")
+    except Exception:
+        pass
+    return stale, cur, mcp
+
+def _codex_integration():
+    """mcp_cmd or None for Codex CLI"""
+    cp = os.path.expanduser("~/.codex/config.toml")
+    if not os.path.exists(cp): return None
+    try:
+        import tomllib
+        return tomllib.loads(open(cp).read()).get("mcp_servers", {}).get("raidpoint", {}).get("command")
+    except Exception:
+        return None
 
 def doctor_checks():
     out = []
@@ -422,6 +526,20 @@ def doctor_checks():
         else: add("ok", "MCP in Claude Code")
     else:
         add("ok", "Claude Code not configured here", "skipped")
+    agy_present = shutil.which("agy") or os.path.exists(os.path.expanduser("~/.gemini/config")) or os.path.exists(os.path.expanduser("~/.gemini/antigravity-cli"))
+    if agy_present:
+        astale, acur, amcp = _agy_integration()
+        if astale: add("fail", "Antigravity (agy) hooks point to a path that is not this install", astale[0])
+        elif not acur: add("warn", "Antigravity (agy) hooks not registered for this install", "run: raidpoint doctor --fix")
+        else: add("ok", "Antigravity (agy) hooks")
+        if amcp is None: add("warn", "MCP not registered in Antigravity (agy)", "run: raidpoint doctor --fix")
+        elif amcp != SELF: add("fail", "MCP in Antigravity (agy) points to another path", amcp)
+        else: add("ok", "MCP in Antigravity (agy)")
+    if shutil.which("codex") or os.path.exists(os.path.expanduser("~/.codex/config.toml")):
+        cmcp = _codex_integration()
+        if cmcp is None: add("warn", "MCP not registered in Codex", "run: raidpoint doctor --fix")
+        elif cmcp != SELF: add("fail", "MCP in Codex points to another path", cmcp)
+        else: add("ok", "MCP in Codex")
     if headless and shutil.which("systemctl"):
         if os.path.exists(UNIT):
             add("ok" if _linger() else "warn", "sessions at boot (systemd unit)", "" if _linger() else
@@ -461,6 +579,18 @@ def _doctor_fix():
                 c.setdefault("mcpServers", {})["raidpoint"] = {"type": "stdio", "command": SELF, "args": ["mcp"], "env": {}}
                 core.write_json_atomic(cj, c); did.append("pointed the MCP at this install")
         except Exception as e: did.append(f"MCP not fixed: {e}")
+    if shutil.which("agy") or os.path.exists(os.path.expanduser("~/.gemini/config")):
+        astale, acur, amcp = _agy_integration()
+        if astale or not acur or amcp != SELF:
+            import io, contextlib
+            with contextlib.redirect_stdout(io.StringIO()):
+                try: _install_agy(); did.append("registered/updated Antigravity (agy) hooks and MCP")
+                except Exception as e: did.append(f"agy fix failed: {e}")
+    if (shutil.which("codex") or os.path.exists(os.path.expanduser("~/.codex/config.toml"))) and _codex_integration() != SELF:
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            try: cmd_install(); did.append("updated Codex MCP")
+            except Exception as e: did.append(f"Codex MCP fix failed: {e}")
     return did
 
 def cmd_doctor(a):
@@ -478,8 +608,30 @@ def cmd_doctor(a):
 # ------------------------------------------------------------------ projects (terminal)
 def cmd_ls():
     on = core.alive()
-    for n, p in core.load_projects().items():
-        print(f"{'●' if core.sess(n) in on else '○'} {n:<22} {p.get('host', '') + ':' if p.get('host') else ''}{p.get('dir', '')}")
+    db = core.load_projects()
+    for n in core.ordered_projects():
+        p = db[n]
+        star = "★ " if p.get("pinned") else "  "
+        note = f"  — {p['note']}" if p.get("note") else ""
+        print(f"{'●' if core.sess(n) in on else '○'} {star}{n:<22} {p.get('host', '') + ':' if p.get('host') else ''}{p.get('dir', '')}{note}")
+
+def cmd_resume(a):
+    proj = a[0] if a else core.project_for_cwd(os.getcwd())
+    if not proj: sys.exit("no project: run inside a project folder or pass its name (raidpoint resume <project>)")
+    print(core.project_resume(proj), end="")
+
+def cmd_pin(a, pinned=True):
+    if not a: sys.exit(f"usage: raidpoint {'pin' if pinned else 'unpin'} <project>")
+    try: core.pin_project(a[0], pinned=pinned)
+    except KeyError: sys.exit(f"project '{a[0]}' does not exist")
+    print(f"{'pinned' if pinned else 'unpinned'}: {a[0]}")
+
+def cmd_note(a):
+    if not a: sys.exit("usage: raidpoint note <project> [text...]")
+    proj, text = a[0], " ".join(a[1:]).strip()
+    try: core.set_project_note(proj, text)
+    except KeyError: sys.exit(f"project '{proj}' does not exist")
+    print(f"note {'saved' if text else 'cleared'} for {proj}")
 
 def cmd_add(a):
     name = core.safe_name(a[0]); d = os.path.abspath(os.path.expanduser(a[1])) if len(a) > 1 else os.getcwd()
@@ -559,9 +711,18 @@ def main():
         r = core.check_update(apply="--check" not in a)
         print(f"[{r['status']}] {r['msg']}"); sys.exit(1 if r["status"] == "error" else 0)
     elif c == "ls": cmd_ls()
+    elif c == "resume": cmd_resume(a[1:])
+    elif c == "pin": cmd_pin(a[1:], True)
+    elif c == "unpin": cmd_pin(a[1:], False)
+    elif c == "note": cmd_note(a[1:])
     elif c == "add" and len(a) > 1: cmd_add(a[1:])
     elif c == "rm" and len(a) == 2: core.update_projects(lambda db: db.pop(a[1], None))
-    elif c == "kill" and len(a) == 2: subprocess.run(core.TMUX + ["kill-session", "-t", core.sess_t(a[1])])
+    elif c == "kill" and len(a) >= 2:
+        if "--all" in a[1:]:
+            subprocess.run(core.TMUX + ["kill-server"])
+        else:
+            for sname in a[1:]:
+                subprocess.run(core.TMUX + ["kill-session", "-t", core.sess_t(sname)])
     elif c == "stop": subprocess.run(core.TMUX + ["kill-server"])
     elif c == "repos":
         if not core.gh_ok(): sys.exit("gh is not authenticated: run `gh auth login`")
